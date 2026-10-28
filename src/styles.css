@@ -103,3 +103,14 @@ button:focus-visible, input:focus-visible { outline: 3px solid #2b8477; outline-
 @keyframes notulist-talk { from { transform: scaleY(.25); } to { transform: scaleY(1); } }
 @media (max-width: 560px) { .voice-intro { gap: 1rem; align-items: flex-start; } .notulist-character { flex-basis: 78px; width: 78px; height: 90px; } .character-face { transform: scale(.85); } .voice-controls button { font-size: .82rem; } .voice-chat-heading { display: block; } .queue-actions { flex-wrap: wrap; justify-content: flex-end; } }
 @media (prefers-reduced-motion: reduce) { .character-halo, .character-eye, .character-mouth { animation: none !important; } }
+.meeting-workspace { margin-top: 1.5rem; border: 1px solid #c9dfda; border-radius: 1.5rem; padding: 1rem; background: #f7fbfa; }
+.meeting-workspace-heading { padding: .5rem .5rem 0; }
+.meeting-workspace-heading h2 { margin: 0; letter-spacing: -.03em; }
+.meeting-workspace-heading p { color: #51636a; margin-bottom: .5rem; }
+.meeting-workspace .voice-panel { margin: 1rem 0; }
+.transcript-warning { grid-column: 2; display: block; color: #885800; }
+#restore-meeting { display: block; width: 100%; padding: .75rem; margin-top: .75rem; border: 1px solid #b2c9c4; border-radius: .75rem; background: white; font: inherit; }
+.shell > .hero { padding: 1.5rem 2rem; border-radius: 1.5rem; }
+.hero h1 { font-size: clamp(2rem, 4vw, 3.25rem); line-height: 1.05; margin: .65rem 0; }
+.hero .intro { max-width: 70ch; font-size: 1rem; margin: .75rem 0; }
+@media (max-width: 560px) { .shell > .hero { padding: 1.25rem; } .transcript-heading { flex-wrap: wrap; } .queue-actions { justify-content: flex-start; } .status-card { flex-wrap: wrap; gap: 1rem; } }

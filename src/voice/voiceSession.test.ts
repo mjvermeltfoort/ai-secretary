@@ -168,3 +168,13 @@ describe("live conversation", () => {
     expect(current.channel().sent).toHaveLength(length + 1);
   });
 });
+
+it("uses an isolated clone of the meeting microphone without requesting a second device", async () => {
+  const track = { enabled: true, stop: vi.fn() };
+  const clone = { getTracks: () => [track], getAudioTracks: () => [track] };
+  const voice = new VoiceSession({ audio: current.audio as unknown as HTMLAudioElement,
+    createToken: current.createToken, getContext: current.context, getMicrophone: () => clone as unknown as MediaStream,
+    onSnapshot: () => {}, onMessage: () => {}, onProposal: () => "pending" });
+  await voice.start();expect(current.getUserMedia).not.toHaveBeenCalled();
+  voice.disconnect();expect(track.stop).toHaveBeenCalledOnce();expect(current.track.stop).not.toHaveBeenCalled();
+});

@@ -11,6 +11,8 @@ interface Props {
   transcripts: TranscriptResult[];
   notes?: MeetingNotes;
   onNotesUpdated: (notes: MeetingNotes) => void;
+  getMicrophone?: () => MediaStream | undefined;
+  stopSignal?: number;
 }
 interface PendingProposal { proposal: ActionItemProposal; expectedRevision: string; }
 const initial: VoiceSnapshot = { status: "idle", micMuted: false, playbackBlocked: false };
@@ -40,6 +42,7 @@ export function VoicePanel(props: Props) {
     const voice = new VoiceSession({
       audio: audio.current!,
       createToken: () => createVoiceToken(props.meetingId),
+      getMicrophone: () => latest.current.getMicrophone?.(),
       getContext: () => meetingVoiceContext(props.meetingId, latest.current.transcripts, latest.current.notes),
       onSnapshot: (value) => { if (alive.current) setSnapshot(value); },
       onMessage: (message) => {
@@ -70,6 +73,7 @@ export function VoicePanel(props: Props) {
     };
   }, [props.meetingId]);
 
+  useEffect(() => { if(props.stopSignal)session.current?.disconnect(); }, [props.stopSignal]);
   useEffect(() => { session.current?.updateContext(); }, [props.transcripts, props.notes]);
   useEffect(() => {
     const node = chatLog.current;
@@ -113,7 +117,7 @@ export function VoicePanel(props: Props) {
       <div className="notulist-character" role="img" aria-label={`AI-notulist: ${labels[snapshot.status]}`}>
         <div className="character-halo" /><div className="character-face"><i className="character-eye" /><i className="character-eye" /><span className="character-mouth" /></div>
       </div>
-      <div className="voice-title"><span className="label">Jouw AI-notulist</span><h2 id="voice-heading">Even overleggen?</h2>
+      <div className="voice-title"><span className="label">Jouw AI-notulist</span><h2 id="voice-heading">Overleg met je notulist</h2>
         <p className="voice-status" role="status">{snapshot.micMuted && snapshot.status === "listening" ? "Microfoon uit · je kunt ook typen" : labels[snapshot.status]}</p>
         <p className="voice-explainer">{active
           ? "Je praat nu met de notulist. Onderbreek gerust. Stop het gesprek als de vergadering verdergaat."
@@ -128,12 +132,12 @@ export function VoicePanel(props: Props) {
         {(snapshot.status === "speaking" || snapshot.status === "thinking") && <button className="voice-outline-button" onClick={() => session.current?.interrupt()}>Onderbreek antwoord</button>}
       </>}
     </div>
-    <p className="voice-footnote">Gesprek en vergaderopname staan los van elkaar. Gebruik oortjes om de AI-stem uit je opname te houden. Live spraak gebruikt je OpenAI-budget en stopt na vijf minuten.</p>
+    <p className="voice-footnote">Opname, transcriptie en dit overleg horen bij dezelfde vergadering. Gebruik oortjes om de AI-stem uit je opname te houden. Live transcriptie en overleg gebruiken je OpenAI-budget. Alleen het overleg stopt na vijf minuten; transcriptie loopt mee met de opname.</p>
     {snapshot.error && <p className="voice-error" role="alert">{snapshot.error}</p>}
     {snapshot.playbackBlocked && <button className="voice-outline-button" onClick={() => void session.current?.playAudio()}>Gesproken antwoord afspelen</button>}
     <audio ref={audio} autoPlay controls={connected} className="voice-audio" aria-label="Stem van de AI-notulist" />
     {(connected || messages.length > 0) && <div className="voice-conversation">
-      <div className="voice-chat-heading"><h3>Gesprek met de notulist</h3><span>Los van het vergadertranscript</span></div>
+      <div className="voice-chat-heading"><h3>Overleg binnen deze vergadering</h3><span>AI-antwoorden zijn geen vergaderbesluiten</span></div>
       <div ref={chatLog} className="voice-chat-log" role="log" aria-live="polite" aria-relevant="additions text">
         {messages.length === 0 && <p className="muted">Stel je vraag hardop of typ hem hieronder.</p>}
         {messages.map((message) => <div className={`voice-message voice-message-${message.role}`} key={message.id}>

@@ -1,12 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut, type User } from "firebase/auth";
-import { buildRecoveryPlan, type RecordingState } from "./domain/recording";
+import { type RecordingState } from "./domain/recording";
 import { BrowserRecorder } from "./recording/browserRecorder";
 import { auth } from "./lib/firebase";
 import { canUseApp } from "./lib/access";
-import { transcribeLocalSegment, type TranscriptResult } from "./transcription/transcriptionClient";
+import { type TranscriptResult } from "./transcription/transcriptionClient";
 import { IndexedDbSegmentStore } from "./recording/localSegmentStore";
-import { TranscriptQueue, type QueueSnapshot } from "./transcription/transcriptQueue";
+import { LiveTranscription, type LiveState } from "./transcription/liveTranscription";
+import { reviewRecording } from "./transcription/review";
 import { createMeetingNotes, type MeetingNotes } from "./notes/notesClient";
 import { VoicePanel } from "./voice/VoicePanel";
 
@@ -16,7 +17,7 @@ const initialState: RecordingState = {
   uploadedSequences: [],
   localSequences: [],
 };
-const emptyQueueSnapshot: QueueSnapshot = { pending: 0, processing: 0, completed: 0, failed: 0 };
+
 
 function createSessionId(): string {
   const suffix = typeof crypto.randomUUID === "function"
@@ -26,82 +27,108 @@ function createSessionId(): string {
 }
 
 export function App() {
-  const [session, setSession] = useState(() => ({ id: createSessionId(), startedAt: Date.now() }));
+  const [session, setSession] = useState(() => {
+    try { const old = JSON.parse(localStorage.getItem("secretary-active-meeting") ?? "null"); if (old && /^meeting-[a-zA-Z0-9_-]+$/.test(old.id) && typeof old.startedAt === "number") return old as { id: string; startedAt: number }; } catch {}
+    return { id: createSessionId(), startedAt: Date.now() };
+  });
   const recorder = useRef<BrowserRecorder | null>(null);
-  const queue = useRef<TranscriptQueue | null>(null);
+  const store = useRef(new IndexedDbSegmentStore());
+  const live = useRef<LiveTranscription | null>(null);
+  const reviewPromise = useRef<Promise<TranscriptResult[]> | null>(null);
+  const [liveState, setLiveState] = useState<LiveState>("idle");
+  const [reviewed, setReviewed] = useState(false);
+  const [reviewing, setReviewing] = useState(false);
+  const [progress, setProgress] = useState({ done: 0, total: 0 });
+  const [transitioning, setTransitioning] = useState(false);
+  const [stopSignal, setStopSignal] = useState(0);
+  const [savedMeetings, setSavedMeetings] = useState<Array<{id:string;startedAt:number;count:number}>>([]);
   const [recording, setRecording] = useState<RecordingState>(initialState);
   const [error, setError] = useState<string>();
   const [user, setUser] = useState<User | null>(auth.currentUser);
   const [transcripts, setTranscripts] = useState<TranscriptResult[]>([]);
-  const [queueSnapshot, setQueueSnapshot] = useState<QueueSnapshot>(emptyQueueSnapshot);
+
   const [notes, setNotes] = useState<MeetingNotes>();
   const [notesLoading, setNotesLoading] = useState(false);
   const meetingId = session.id;
   const sessionIdRef = useRef(meetingId);
   sessionIdRef.current = meetingId;
-  const recovery = useMemo(() => buildRecoveryPlan(recording), [recording]);
+  useEffect(() => {
+    try { localStorage.setItem("secretary-active-meeting", JSON.stringify(session)); } catch {}
+    const transcriber = new LiveTranscription(meetingId, (result) => {
+      if (sessionIdRef.current !== result.meetingId || !canUseApp(auth.currentUser)) return;
+      setTranscripts(current => [...current.filter(item => item.sequence !== result.sequence), result].sort((a,b)=>a.sequence-b.sequence));
+    }, state => { if(sessionIdRef.current === meetingId)setLiveState(state); });
+    live.current = transcriber;
+    void store.current.list(meetingId).then(segments => {
+      if (sessionIdRef.current !== meetingId || !segments.length || recorder.current?.recordingState.status === "recording" || recorder.current?.recordingState.status === "paused") return;
+      setRecording({ status: "stopped", nextSequence: Math.max(...segments.map(s=>s.sequence))+1, localSequences: segments.map(s=>s.sequence), uploadedSequences: [] });
+    }).catch(cause=>setError(String(cause)));
+    return () => transcriber.close();
+  }, [meetingId]);
+
+  async function refreshSaved() { setSavedMeetings(await store.current.meetings()); }
 
   useEffect(() => onAuthStateChanged(auth, (currentUser) => {
     setUser(currentUser);
     if (!canUseApp(currentUser)) {
       setTranscripts([]);
       setNotes(undefined);
-      setQueueSnapshot(emptyQueueSnapshot);
+      live.current?.close();
+      setReviewed(false);
       void recorder.current?.stop().then(() => {
         setRecording(recorder.current?.recordingState ?? initialState);
-      });
+      }).catch(cause=>setError(String(cause)));
     }
   }), []);
 
   useEffect(() => {
-    if (canUseApp(user)) void queue.current?.process(meetingId);
-
-    const retryWhenOnline = () => {
-      if (canUseApp(auth.currentUser)) void queue.current?.process(meetingId);
-    };
-    window.addEventListener("online", retryWhenOnline);
-    return () => window.removeEventListener("online", retryWhenOnline);
-  }, [meetingId, user]);
+    if (canUseApp(user)) void refreshSaved().catch(cause=>setError(String(cause)));
+    const retry = () => { if (canUseApp(auth.currentUser) && recorder.current?.recordingState.status === "recording") void live.current?.start(); };
+    const offline = () => { live.current?.close(); if(recorder.current?.recordingState.status === "recording")setLiveState("offline"); };
+    window.addEventListener("online", retry); window.addEventListener("offline", offline);
+    return () => { window.removeEventListener("online", retry); window.removeEventListener("offline", offline); };
+  }, [user]);
 
   useEffect(() => {
-    const store = new IndexedDbSegmentStore();
-    queue.current = new TranscriptQueue({
-      store,
-      transcribe: transcribeLocalSegment,
-      onSnapshot: (snapshot, snapshotMeetingId) => {
-        if (sessionIdRef.current === snapshotMeetingId) setQueueSnapshot(snapshot);
-      },
-      onResult: (result) => {
-        if (sessionIdRef.current !== result.meetingId) return;
-        setTranscripts((current) => [...current.filter((item) => item.sequence !== result.sequence), result]
-          .sort((a, b) => a.sequence - b.sequence));
-      },
+    const instance = new BrowserRecorder({
+      store: store.current,
+      onAudio: samples => live.current?.push(samples),
+      onSegment: () => { setRecording(instance.recordingState); setReviewed(false); },
+      onError: cause => { setError(cause.message); setRecording({ ...instance.recordingState, status: "stopped" }); live.current?.close(); },
     });
-    recorder.current = new BrowserRecorder({
-      onSegment: (segment) => {
-        setRecording(recorder.current?.recordingState ?? initialState);
-        if (canUseApp(auth.currentUser)) void queue.current?.process(segment.meetingId);
-      },
-      onError: (cause) => setError(cause.message),
-      store,
-    });
-    if (canUseApp(auth.currentUser)) void queue.current.process(meetingId);
-
-    return () => {
-      void recorder.current?.stop();
-    };
+    recorder.current = instance;
+    return () => { live.current?.close(); void instance.stop().catch(()=>undefined); };
   }, []);
 
+  async function ensureReview(): Promise<TranscriptResult[]> {
+    if (reviewPromise.current) return reviewPromise.current;
+    if (recorder.current?.recordingState.status === "recording" || recorder.current?.recordingState.status === "paused") throw new Error("Rond de opname eerst af voor de definitieve controle.");
+    if (!canUseApp(auth.currentUser)) throw new Error("Log eerst in.");
+    if (navigator.onLine === false) throw new Error("Je bent offline. De audio is lokaal bewaard; controleer de transcriptie zodra je weer online bent.");
+    setReviewing(true); setError(undefined);
+    const task = (async () => {
+      const segments = await store.current.list(meetingId);
+      const result = await reviewRecording(meetingId, segments, (done,total) => {
+        if(sessionIdRef.current === meetingId)setProgress({done,total});
+      }, () => sessionIdRef.current === meetingId && canUseApp(auth.currentUser));
+      if(sessionIdRef.current === meetingId && canUseApp(auth.currentUser)) { setTranscripts(result); setReviewed(true); setRecording(current=>({...current,uploadedSequences:segments.map(s=>s.sequence)})); }
+      return result;
+    })();
+    reviewPromise.current = task;
+    try { return await task; } finally { reviewPromise.current=null; setReviewing(false); }
+  }
+
   async function startOrResume() {
-    setError(undefined);
+    setError(undefined); setTransitioning(true);
 
     try {
       if (!canUseApp(auth.currentUser)) throw new Error("Dit account heeft geen toegang tot deze app.");
       await recorder.current?.start(meetingId);
-      setRecording(recorder.current?.recordingState ?? initialState);
+      setRecording(recorder.current?.recordingState ?? initialState); setReviewed(false);
+      void live.current?.start();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Opname kon niet starten.");
-    }
+    } finally { setTransitioning(false); }
   }
 
   async function signIn() {
@@ -113,28 +140,43 @@ export function App() {
     }
   }
 
-  function pause() {
-    recorder.current?.pause();
-    setRecording(recorder.current?.recordingState ?? initialState);
+  async function pause() {
+    setTransitioning(true);
+    try { await recorder.current?.pause(); await live.current?.finish(); setRecording(recorder.current?.recordingState ?? initialState); }
+    catch(cause) { setError(cause instanceof Error ? cause.message : "Pauzeren mislukt."); }
+    finally { setTransitioning(false); }
   }
 
   async function stop() {
-    await recorder.current?.stop();
-    setRecording(recorder.current?.recordingState ?? initialState);
+    setTransitioning(true); setError(undefined); setStopSignal(value=>value+1);
+    try {
+      await recorder.current?.stop(); await live.current?.finish();
+      setRecording(recorder.current?.recordingState ?? initialState);
+      await refreshSaved();
+      const segments = await store.current.list(meetingId);
+      if(segments.length)await ensureReview();
+    } catch(cause) { setError(cause instanceof Error ? cause.message : "Afronden mislukt. De lokale audio blijft bewaard."); }
+    finally { setTransitioning(false); }
   }
 
   function retryTranscriptie() {
-    setError(undefined);
-    if (canUseApp(auth.currentUser)) void queue.current?.process(meetingId);
+    if (isRecording) void live.current?.start();
+    else void ensureReview().catch(cause=>setError(cause instanceof Error ? cause.message : "Controle mislukt."));
+  }
+
+  async function restoreMeeting(id: string) {
+    if(isRecording || isPaused || reviewing || notesLoading || transitioning)return;
+    const previous=savedMeetings.find(s=>s.id===id); if(!previous)return;
+    setSession({id,startedAt:previous.startedAt}); setRecording(initialState); setTranscripts([]); setNotes(undefined); setReviewed(false); setError(undefined);
   }
 
   function startNewSession() {
-    if (isRecording || isPaused) return;
+    if (isRecording || isPaused || reviewing || notesLoading || transitioning) return;
     setSession({ id: createSessionId(), startedAt: Date.now() });
     setRecording(initialState);
     setTranscripts([]);
     setNotes(undefined);
-    setQueueSnapshot(emptyQueueSnapshot);
+    setReviewed(false);
     setError(undefined);
   }
 
@@ -143,6 +185,8 @@ export function App() {
     setNotesLoading(true);
     try {
       if (!canUseApp(auth.currentUser)) throw new Error("Dit account heeft geen toegang tot deze app.");
+      if(!reviewed) await ensureReview();
+      if(!canUseApp(auth.currentUser) || sessionIdRef.current !== meetingId)return;
       const generated = await createMeetingNotes(meetingId);
       if (sessionIdRef.current === meetingId && canUseApp(auth.currentUser)) setNotes(generated);
     } catch (cause) {
@@ -155,12 +199,13 @@ export function App() {
   async function signOutAccount() {
     setError(undefined);
     try {
-      await recorder.current?.stop();
+      live.current?.close(); await recorder.current?.stop();
       await signOut(auth);
       setRecording(initialState);
       setTranscripts([]);
       setNotes(undefined);
-      setQueueSnapshot(emptyQueueSnapshot);
+      live.current?.close();
+      setReviewed(false);
       setSession({ id: createSessionId(), startedAt: Date.now() });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Uitloggen mislukt.");
@@ -188,9 +233,9 @@ export function App() {
     <main className="shell">
       <section className="hero">
         <p className="eyebrow">AI Vergadersecretaris</p>
-        <h1>Vergaderingen die niets vergeten.</h1>
+        <h1>Je vergadering, met je notulist.</h1>
         <p className="intro">
-          Lokale opname eerst. Transcriptie, vragen en actiepunten daarna.
+          Neem op, volg de tekst en overleg tussendoor. Na afloop controleren we de transcriptie voor de notulen.
         </p>
         <div className="account-row">
           {user ? <span>Ingelogd als {user.email ?? user.displayName ?? "Google-gebruiker"}</span> : <span>Log in voor OpenAI-transcriptie.</span>}
@@ -199,45 +244,45 @@ export function App() {
         </div>
         <div className="session-row">
           <span>Sessie gestart {new Date(session.startedAt).toLocaleTimeString("nl-NL", { hour: "2-digit", minute: "2-digit" })}</span>
-          <button className="secondary-button" onClick={startNewSession} disabled={isRecording || isPaused || notesLoading}>
+          <button className="secondary-button" onClick={startNewSession} disabled={isRecording || isPaused || notesLoading || reviewing || transitioning}>
             Nieuwe sessie
           </button>
         </div>
-        <div className="record-actions">
-          {!isRecording && (
-            <button className="record-button" onClick={() => void startOrResume()} disabled={!canUseApp(user)}>
-              {isPaused ? "Hervat opname" : "Start opname"}
-            </button>
-          )}
-          {isRecording && <button className="secondary-button" onClick={pause}>Pauzeer</button>}
-          {(isRecording || isPaused) && <button className="secondary-button" onClick={() => void stop()}>Stop</button>}
-        </div>
+
         {error && <p className="error" role="alert">{error}</p>}
       </section>
 
-      <VoicePanel key={meetingId} meetingId={meetingId} transcripts={transcripts} notes={notes}
+      <section className="meeting-workspace" aria-label="Vergadering en notulist">
+        <div className="record-actions">
+          {!isRecording && (
+            <button className="record-button" onClick={() => void startOrResume()} disabled={!canUseApp(user) || reviewing || notesLoading || transitioning}>
+              {isPaused ? "Hervat vergadering" : "Start vergadering"}
+            </button>
+          )}
+          {isRecording && <button className="secondary-button" onClick={() => void pause()} disabled={transitioning}>Pauzeer</button>}
+          {(isRecording || isPaused) && <button className="secondary-button" onClick={() => void stop()} disabled={transitioning}>Rond vergadering af</button>}
+        </div>
+      <div className="meeting-workspace-heading"><h2>Deze vergadering</h2><p>{isRecording ? "Opname loopt · overleg gerust tussendoor" : isPaused ? "Opname gepauzeerd · overleg blijft beschikbaar" : "Opname, tekst en overleg op één plek"}</p></div>
+      <VoicePanel key={meetingId} meetingId={meetingId} transcripts={transcripts} notes={notes} stopSignal={stopSignal} getMicrophone={() => recorder.current?.cloneMicrophone()}
         onNotesUpdated={(updated) => { if (sessionIdRef.current === updated.meetingId) setNotes(updated); }} />
 
       <section className="transcript-card">
         <div className="transcript-heading">
           <div><span className="label">Transcriptie</span><h2>Live tekst</h2></div>
           <div className="queue-actions">
-            <span>{transcripts.length} segmenten</span>
-            {queueSnapshot.failed > 0 && <button className="retry-button" onClick={retryTranscriptie}>Retry {queueSnapshot.failed}</button>}
-            {transcripts.length > 0 && <button
-              className="secondary-light-button"
-              onClick={() => void generateNotes()}
-              disabled={notesLoading || queueSnapshot.pending > 0 || queueSnapshot.processing > 0 || queueSnapshot.failed > 0}
-            >
-              {notesLoading ? "Notulen maken…" : "Genereer notulen"}
-            </button>}
+            <span>{reviewed ? "Na afloop verwerkt" : liveState === "live" ? "Live · voorlopig" : liveState === "connecting" ? "Live verbinding maken…" : "Lokale audio beschikbaar"}</span>
+            {(liveState === "offline" || (!isRecording && recording.localSequences.length>0)) && <button className="retry-button" disabled={reviewing || transitioning || isPaused} onClick={retryTranscriptie}>{isRecording ? "Live tekst herstellen" : "Transcript opnieuw controleren"}</button>}
+            {!isRecording && !isPaused && recording.localSequences.length>0 && <button className="secondary-light-button" onClick={() => void generateNotes()} disabled={notesLoading || reviewing || transitioning}>{notesLoading ? "Notulen maken…" : "Maak definitieve notulen"}</button>}
+
           </div>
         </div>
-        {transcripts.length === 0 ? <p className="muted">Start een opname na Google-login. Elk lokaal segment wordt daarna server-side getranscribeerd.</p> : transcripts.map((transcript) => (
-          <p className="transcript-line" key={transcript.sequence}><span>#{transcript.sequence}</span>{transcript.text}</p>
+        {transcripts.length === 0 ? <p className="muted">Start de vergadering. De tekst verschijnt doorlopend en is voorlopig tot de controle na afloop.</p> : transcripts.map((transcript) => (
+          <p className="transcript-line" key={transcript.sequence}><span>{transcript.provisional ? "Live" : `#${transcript.sequence}`}</span>{transcript.text}{transcript.overlapUncertain && <small className="transcript-warning">Overlap bij deze grens controleren; er is geen tekst stilzwijgend verwijderd.</small>}</p>
         ))}
       </section>
 
+      {liveState === "offline" && <p className="muted" role="status">Live tekst is onderbroken. De opname blijft lokaal doorlopen; gemiste audio wordt na afronden meegenomen.</p>}
+      {reviewing && <p role="status">Transcriptie controleren vanuit de opname: {progress.done} van {progress.total || "…"} vensters. Je kunt hierna definitieve notulen maken.</p>}
       {notes && <section className="notes-card">
         <div className="transcript-heading">
           <div><span className="label">AI-uitwerking</span><h2>Notulen</h2></div>
@@ -261,6 +306,11 @@ export function App() {
         </div>}
       </section>}
 
+      </section>
+
+      {savedMeetings.length>0 && <section className="transcript-card"><label htmlFor="restore-meeting">Lokaal bewaarde vergadering openen</label><select id="restore-meeting" value={meetingId} disabled={isRecording || isPaused || reviewing || notesLoading || transitioning} onChange={event=>void restoreMeeting(event.target.value)}><option value={meetingId}>Deze vergadering</option>{savedMeetings.filter(item=>item.id!==meetingId).map(item=><option key={item.id} value={item.id}>{new Date(item.startedAt).toLocaleString("nl-NL")} · {item.count} audioblokken</option>)}</select><p className="muted">De audio blijft op dit apparaat staan. Open een bewaarde opname om die later te controleren of te herstellen.</p></section>}
+
+
       <section className="status-card" aria-live="polite">
         <div>
           <span className="label">Status</span>
@@ -272,13 +322,13 @@ export function App() {
         </div>
         <div>
           <span className="label">Herstelqueue</span>
-          <strong>{recovery.missingSequences.length} segmenten</strong>
+          <strong>{reviewed ? "Gecontroleerd" : `${recording.localSequences.length} blokken bewaard`}</strong>
         </div>
       </section>
 
       <section className="feature-grid">
         <article><span>01</span><h2>Offline veilig</h2><p>Audiosegmenten gaan direct naar lokale IndexedDB-opslag.</p></article>
-        <article><span>02</span><h2>Live scherp</h2><p>OpenAI verwerkt transcriptie server-side, zonder sleutel in de app.</p></article>
+        <article><span>02</span><h2>Live scherp</h2><p>Doorlopende live tekst voedt hetzelfde overleg met de notulist; de definitieve controle gebruikt de lokale audio.</p></article>
         <article><span>03</span><h2>Actiegericht</h2><p>Eigenaar en deadline worden gecontroleerd voordat een actiepunt klaar is.</p></article>
       </section>
     </main>

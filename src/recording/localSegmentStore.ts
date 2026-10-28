@@ -4,6 +4,7 @@ export interface LocalSegment {
   sequence: number;
   createdAt: number;
   durationMs: number;
+  startMs?: number;
   blob: Blob;
   transcriptionStatus?: "pending" | "processing" | "completed" | "failed";
   transcriptionError?: string;
@@ -27,21 +28,34 @@ export class IndexedDbSegmentStore implements SegmentStore {
         .index("meetingId")
         .getAll(meetingId);
 
-      request.onsuccess = () => resolve(request.result.sort((a, b) => a.sequence - b.sequence));
+      request.onsuccess = () => { database.close(); resolve(request.result.sort((a, b) => a.sequence - b.sequence)); };
       request.onerror = () => reject(request.error ?? new Error("Lokale segmenten konden niet worden gelezen."));
     });
   }
 
   async put(segment: LocalSegment): Promise<void> {
     const database = await this.open();
-
     await new Promise<void>((resolve, reject) => {
-      const request = database.transaction(storeName, "readwrite")
-        .objectStore(storeName)
-        .put(segment);
+      const transaction = database.transaction(storeName, "readwrite");
+      transaction.objectStore(storeName).put(segment);
+      transaction.oncomplete = () => { database.close(); resolve(); };
+      transaction.onerror = transaction.onabort = () => { database.close(); reject(transaction.error ?? new Error("Audiosegment kon niet lokaal worden opgeslagen.")); };
+    });
+  }
 
-      request.onsuccess = () => resolve();
-      request.onerror = () => reject(request.error ?? new Error("Audiosegment kon niet lokaal worden opgeslagen."));
+  async meetings(): Promise<Array<{ id: string; startedAt: number; count: number }>> {
+    const database = await this.open();
+    return new Promise((resolve, reject) => {
+      const request = database.transaction(storeName, "readonly").objectStore(storeName).getAll();
+      request.onsuccess = () => {
+        const meetings = new Map<string, { id: string; startedAt: number; count: number }>();
+        for (const segment of request.result as LocalSegment[]) {
+          const previous = meetings.get(segment.meetingId);
+          meetings.set(segment.meetingId, { id: segment.meetingId, startedAt: Math.min(previous?.startedAt ?? Infinity, segment.createdAt), count: (previous?.count ?? 0) + 1 });
+        }
+        database.close(); resolve([...meetings.values()].sort((a,b) => b.startedAt - a.startedAt));
+      };
+      request.onerror = () => { database.close(); reject(request.error); };
     });
   }
 

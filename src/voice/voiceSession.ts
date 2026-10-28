@@ -7,6 +7,7 @@ export interface VoiceSnapshot { status: VoiceStatus; micMuted: boolean; playbac
 interface VoiceOptions {
   audio: HTMLAudioElement;
   createToken: () => Promise<VoiceToken>;
+  getMicrophone?: () => MediaStream | undefined;
   getContext: () => string;
   onSnapshot: (snapshot: VoiceSnapshot) => void;
   onMessage: (message: VoiceMessage) => void;
@@ -39,7 +40,7 @@ export class VoiceSession {
       if (!navigator.mediaDevices?.getUserMedia || typeof RTCPeerConnection === "undefined") {
         throw new Error("Deze browser ondersteunt geen live spraak. Gebruik een recente versie van Chrome.");
       }
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+      const stream = this.options.getMicrophone?.() ?? await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
       if (generation !== this.generation) { stream.getTracks().forEach((track) => track.stop()); return; }
       this.stream = stream;
       const pc = new RTCPeerConnection();

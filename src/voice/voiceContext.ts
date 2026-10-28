@@ -16,6 +16,7 @@ export function meetingVoiceContext(meetingId: string, transcripts: TranscriptRe
   }
   return JSON.stringify({
     meetingId,
+    transcriptIsProvisional: transcripts.some(item=>item.provisional),
     transcriptIncomplete: transcript.length > 12_000,
     recentTranscript: transcript.slice(-12_000),
     notes: currentNotes ? {
