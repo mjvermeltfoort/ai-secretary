@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { GoogleAuthProvider, onAuthStateChanged, signInWithPopup, type User } from "firebase/auth";
+import { GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut, type User } from "firebase/auth";
 import { buildRecoveryPlan, type RecordingState } from "./domain/recording";
 import { BrowserRecorder } from "./recording/browserRecorder";
 import { auth } from "./lib/firebase";
+import { canUseApp } from "./lib/access";
 import { transcribeLocalSegment, type TranscriptResult } from "./transcription/transcriptionClient";
 import { IndexedDbSegmentStore } from "./recording/localSegmentStore";
 import { TranscriptQueue, type QueueSnapshot } from "./transcription/transcriptQueue";
@@ -39,13 +40,23 @@ export function App() {
   sessionIdRef.current = meetingId;
   const recovery = useMemo(() => buildRecoveryPlan(recording), [recording]);
 
-  useEffect(() => onAuthStateChanged(auth, setUser), []);
+  useEffect(() => onAuthStateChanged(auth, (currentUser) => {
+    setUser(currentUser);
+    if (!canUseApp(currentUser)) {
+      setTranscripts([]);
+      setNotes(undefined);
+      setQueueSnapshot(emptyQueueSnapshot);
+      void recorder.current?.stop().then(() => {
+        setRecording(recorder.current?.recordingState ?? initialState);
+      });
+    }
+  }), []);
 
   useEffect(() => {
-    if (user) void queue.current?.process(meetingId);
+    if (canUseApp(user)) void queue.current?.process(meetingId);
 
     const retryWhenOnline = () => {
-      if (auth.currentUser) void queue.current?.process(meetingId);
+      if (canUseApp(auth.currentUser)) void queue.current?.process(meetingId);
     };
     window.addEventListener("online", retryWhenOnline);
     return () => window.removeEventListener("online", retryWhenOnline);
@@ -68,12 +79,12 @@ export function App() {
     recorder.current = new BrowserRecorder({
       onSegment: (segment) => {
         setRecording(recorder.current?.recordingState ?? initialState);
-        void queue.current?.process(segment.meetingId);
+        if (canUseApp(auth.currentUser)) void queue.current?.process(segment.meetingId);
       },
       onError: (cause) => setError(cause.message),
       store,
     });
-    if (auth.currentUser) void queue.current.process(meetingId);
+    if (canUseApp(auth.currentUser)) void queue.current.process(meetingId);
 
     return () => {
       void recorder.current?.stop();
@@ -84,6 +95,7 @@ export function App() {
     setError(undefined);
 
     try {
+      if (!canUseApp(auth.currentUser)) throw new Error("Dit account heeft geen toegang tot deze app.");
       await recorder.current?.start(meetingId);
       setRecording(recorder.current?.recordingState ?? initialState);
     } catch (cause) {
@@ -112,7 +124,7 @@ export function App() {
 
   function retryTranscriptie() {
     setError(undefined);
-    void queue.current?.process(meetingId);
+    if (canUseApp(auth.currentUser)) void queue.current?.process(meetingId);
   }
 
   function startNewSession() {
@@ -129,6 +141,7 @@ export function App() {
     setError(undefined);
     setNotesLoading(true);
     try {
+      if (!canUseApp(auth.currentUser)) throw new Error("Dit account heeft geen toegang tot deze app.");
       setNotes(await createMeetingNotes(meetingId));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Notulen maken mislukt.");
@@ -137,8 +150,37 @@ export function App() {
     }
   }
 
+  async function signOutAccount() {
+    setError(undefined);
+    try {
+      await recorder.current?.stop();
+      await signOut(auth);
+      setRecording(initialState);
+      setTranscripts([]);
+      setNotes(undefined);
+      setQueueSnapshot(emptyQueueSnapshot);
+      setSession({ id: createSessionId(), startedAt: Date.now() });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Uitloggen mislukt.");
+    }
+  }
+
   const isRecording = recording.status === "recording";
   const isPaused = recording.status === "paused";
+
+  if (!canUseApp(user)) {
+    return <main className="shell"><section className="hero">
+      <p className="eyebrow">AI Vergadersecretaris</p>
+      <h1>{user ? "Geen toegang" : "Log in om te beginnen"}</h1>
+      <p role={user ? "alert" : undefined}>{user
+        ? "Dit Google-account heeft geen toegang tot deze privé-app."
+        : "Deze app is alleen toegankelijk voor het toegestane Google-account."}</p>
+      {user
+        ? <button className="secondary-button" onClick={() => void signOutAccount()}>Uitloggen en ander account kiezen</button>
+        : <button className="secondary-button" onClick={() => void signIn()}>Log in met Google</button>}
+      {error && <p className="error" role="alert">{error}</p>}
+    </section></main>;
+  }
 
   return (
     <main className="shell">
@@ -150,6 +192,7 @@ export function App() {
         </p>
         <div className="account-row">
           {user ? <span>Ingelogd als {user.email ?? user.displayName ?? "Google-gebruiker"}</span> : <span>Log in voor OpenAI-transcriptie.</span>}
+          {user && <button className="secondary-button" onClick={() => void signOutAccount()}>Uitloggen</button>}
           {!user && <button className="secondary-button" onClick={() => void signIn()}>Log in met Google</button>}
         </div>
         <div className="session-row">
@@ -160,7 +203,7 @@ export function App() {
         </div>
         <div className="record-actions">
           {!isRecording && (
-            <button className="record-button" onClick={() => void startOrResume()} disabled={!user}>
+            <button className="record-button" onClick={() => void startOrResume()} disabled={!canUseApp(user)}>
               {isPaused ? "Hervat opname" : "Start opname"}
             </button>
           )}

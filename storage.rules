@@ -2,7 +2,11 @@ rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
     function signedIn() {
-      return request.auth != null;
+      // Only the verified owner signed in through Google may use this app.
+      return request.auth != null
+        && request.auth.token.email == 'mjvermeltfoort@gmail.com'
+        && request.auth.token.email_verified == true
+        && request.auth.token.firebase.sign_in_provider == 'google.com';
     }
 
     function owns(uid) {

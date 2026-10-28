@@ -19,6 +19,12 @@ jobs:
           cache: npm
       - run: npm install
       - run: npm test
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Test owner access in Firebase emulators
+        run: npm run test:rules
       - name: Load public Firebase configuration
         run: cp .env.example .env.production
       - name: Check production Firebase API key
