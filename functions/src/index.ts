@@ -4,14 +4,16 @@ import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { defineSecret } from "firebase-functions/params";
 import OpenAI, { toFile } from "openai";
 
+import { requireOwnerAccess } from "./access";
+
 initializeApp();
 const db = getFirestore();
 const openAiApiKey = defineSecret("OPENAI_API_KEY");
 
-export const health = onCall({ region: "europe-west1" }, () => ({
-  service: "ai-vergadersecretaris",
-  status: "ok",
-}));
+export const health = onCall({ region: "europe-west1" }, (request) => {
+  requireOwnerAccess(request.auth);
+  return { service: "ai-vergadersecretaris", status: "ok" };
+});
 
 export const transcribeSegment = onCall(
   {
@@ -21,8 +23,7 @@ export const transcribeSegment = onCall(
     secrets: [openAiApiKey],
   },
   async (request) => {
-    const uid = request.auth?.uid;
-    if (!uid) throw new HttpsError("unauthenticated", "Log in om transcriptie te starten.");
+    const uid = requireOwnerAccess(request.auth);
 
     const input = request.data as Partial<{
       meetingId: string;
@@ -92,8 +93,7 @@ export const generateMeetingNotes = onCall(
     secrets: [openAiApiKey],
   },
   async (request) => {
-    const uid = request.auth?.uid;
-    if (!uid) throw new HttpsError("unauthenticated", "Log in om notulen te maken.");
+    const uid = requireOwnerAccess(request.auth);
 
     const input = request.data as Partial<{ meetingId: string }>;
     if (!isValidMeetingInput(input)) {
