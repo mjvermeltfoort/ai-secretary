@@ -1,0 +1,139 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Assumed model: all data is private and scoped below users/{uid}.
+    // users/{uid}: displayName, email, photoUrl, createdAt, updatedAt.
+    // meetings/{meetingId}: ownerId, title, startedAt, endedAt, status, createdAt, updatedAt.
+    // segments/{segmentId}: ownerId, sequence, storagePath, checksum, capturedAt, durationMs, status.
+    // transcripts/{chunkId}: ownerId, sequenceStart, sequenceEnd, text, createdAt, source, status.
+    // actionItems/{itemId}: ownerId, description, assignee, deadline, status, createdAt, updatedAt.
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    function immutableOwner(data, uid) {
+      return data.ownerId == uid;
+    }
+
+    function validUser(data) {
+      return data.keys().hasOnly(['displayName', 'email', 'photoUrl', 'createdAt', 'updatedAt'])
+        && data.displayName is string
+        && data.displayName.size() <= 120
+        && data.email is string
+        && data.email.size() <= 320
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function validMeeting(data, uid) {
+      return data.keys().hasOnly(['ownerId', 'title', 'startedAt', 'endedAt', 'status', 'createdAt', 'updatedAt'])
+        && data.ownerId == uid
+        && data.title is string
+        && data.title.size() > 0
+        && data.title.size() <= 240
+        && data.startedAt is timestamp
+        && (!('endedAt' in data) || data.endedAt is timestamp)
+        && data.status in ['recording', 'paused', 'processing', 'completed', 'failed']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function validSegment(data, uid) {
+      return data.keys().hasOnly(['ownerId', 'sequence', 'storagePath', 'checksum', 'capturedAt', 'durationMs', 'status'])
+        && data.ownerId == uid
+        && data.sequence is int
+        && data.sequence > 0
+        && data.storagePath is string
+        && data.storagePath.size() <= 500
+        && data.checksum is string
+        && data.checksum.size() <= 128
+        && data.capturedAt is timestamp
+        && data.durationMs is int
+        && data.durationMs > 0
+        && data.durationMs <= 900000
+        && data.status in ['local', 'uploaded', 'transcribed'];
+    }
+
+    function validTranscript(data, uid) {
+      return data.keys().hasOnly(['ownerId', 'sequenceStart', 'sequenceEnd', 'text', 'createdAt', 'source', 'status'])
+        && data.ownerId == uid
+        && data.sequenceStart is int
+        && data.sequenceEnd is int
+        && data.sequenceStart > 0
+        && data.sequenceEnd >= data.sequenceStart
+        && data.text is string
+        && data.text.size() <= 100000
+        && data.createdAt is timestamp
+        && data.source in ['openai', 'manual']
+        && data.status in ['partial', 'final'];
+    }
+
+    function validActionItem(data, uid) {
+      return data.keys().hasOnly(['ownerId', 'description', 'assignee', 'deadline', 'status', 'createdAt', 'updatedAt'])
+        && data.ownerId == uid
+        && data.description is string
+        && data.description.size() > 0
+        && data.description.size() <= 2000
+        && data.assignee is string
+        && data.assignee.size() <= 320
+        && (!('deadline' in data) || data.deadline is timestamp)
+        && data.status in ['open', 'done', 'cancelled']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    match /users/{uid} {
+      allow read: if isOwner(uid);
+      allow create: if isOwner(uid) && validUser(request.resource.data);
+      allow update: if isOwner(uid)
+        && validUser(request.resource.data)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['displayName', 'photoUrl', 'updatedAt']);
+      allow delete: if isOwner(uid);
+
+      match /meetings/{meetingId} {
+        allow read: if isOwner(uid);
+        allow create: if isOwner(uid) && validMeeting(request.resource.data, uid);
+        allow update: if isOwner(uid)
+          && validMeeting(request.resource.data, uid)
+          && request.resource.data.ownerId == resource.data.ownerId;
+        allow delete: if isOwner(uid);
+
+        match /segments/{segmentId} {
+          allow read: if isOwner(uid);
+          allow create: if isOwner(uid) && validSegment(request.resource.data, uid);
+          allow update: if isOwner(uid)
+            && validSegment(request.resource.data, uid)
+            && request.resource.data.ownerId == resource.data.ownerId;
+          allow delete: if isOwner(uid);
+        }
+
+        match /transcripts/{chunkId} {
+          allow read: if isOwner(uid);
+          allow create: if isOwner(uid) && validTranscript(request.resource.data, uid);
+          allow update: if isOwner(uid)
+            && validTranscript(request.resource.data, uid)
+            && request.resource.data.ownerId == resource.data.ownerId;
+          allow delete: if isOwner(uid);
+        }
+
+        match /actionItems/{itemId} {
+          allow read: if isOwner(uid);
+          allow create: if isOwner(uid) && validActionItem(request.resource.data, uid);
+          allow update: if isOwner(uid)
+            && validActionItem(request.resource.data, uid)
+            && request.resource.data.ownerId == resource.data.ownerId;
+          allow delete: if isOwner(uid);
+        }
+      }
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
