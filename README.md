@@ -44,3 +44,9 @@ Firebase-project `ai-vergadersecretaris` bestaat. Web- en Android-app zijn gereg
 - Review prototype-regels vóór productie.
 - Gebruik App Check, server-side secrets en minimale OAuth-scopes vóór release.
 - Transcriptie gebruikt server-side `gpt-transcribe`; zet OpenAI-key alleen in Secret Manager of `functions/.secret.local` voor lokale emulator-tests.
+
+## Live notulist
+
+Kies **Praat met de notulist** voor een live gesprek met spraak en tekst.
+Zie [LIVE_NOTULIST.md](docs/LIVE_NOTULIST.md) voor bediening, bevestigde
+actiepuntcorrecties, architectuur en de eerste praktijktest.

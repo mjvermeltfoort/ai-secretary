@@ -50,3 +50,56 @@ h1 { max-width: 760px; margin: 1rem 0; font-size: clamp(2.5rem, 8vw, 6rem); line
 .feature-grid h2 { margin: 1.5rem 0 .6rem; font-size: 1.35rem; }
 .feature-grid p { color: #51636a; line-height: 1.5; }
 @media (max-width: 720px) { .shell { padding: 1rem; } .feature-grid { grid-template-columns: 1fr; } .status-card { gap: 1.5rem; } }
+
+/* The voice conversation is separate from the meeting transcript and recorder. */
+.voice-panel { margin: 1.5rem 0; padding: clamp(1.25rem, 3vw, 2rem); border: 1px solid #c9dfda; border-radius: 1.5rem; background: linear-gradient(125deg, #f5fbf9, #fff 65%); }
+.voice-intro { display: flex; gap: 1.75rem; align-items: center; }
+.voice-title { flex: 1; }
+.voice-title .label, .voice-proposal .label { color: #28776b; }
+.voice-title h2 { font-size: clamp(1.6rem, 4vw, 2.3rem); letter-spacing: -.04em; margin: .3rem 0; }
+.voice-status { color: #28776b; font-weight: 750; margin: .5rem 0; }
+.voice-explainer, .voice-footnote { color: #51636a; line-height: 1.55; }
+.voice-explainer { margin-bottom: 0; max-width: 65ch; }
+.voice-controls { display: flex; gap: .65rem; flex-wrap: wrap; margin-top: 1.2rem; }
+.voice-outline-button { border: 1px solid #b2c9c4; background: #fff; color: #173b36; border-radius: 999px; padding: .7rem 1rem; font-weight: 750; cursor: pointer; }
+.voice-outline-button:disabled { cursor: not-allowed; opacity: .45; }
+.voice-footnote { font-size: .82rem; max-width: 95ch; margin: 1rem 0 .4rem; }
+.voice-error { color: #a82626; line-height: 1.5; }
+.voice-notice { color: #236c50; font-weight: 700; }
+.voice-audio { display: block; margin-top: .75rem; max-width: 100%; height: 36px; }
+.voice-audio:not([controls]) { display: none; }
+.notulist-character { flex: 0 0 104px; width: 104px; height: 112px; position: relative; display: grid; place-items: center; }
+.character-halo { position: absolute; width: 100%; aspect-ratio: 1; border-radius: 50%; background: #d9ece6; }
+.character-face { position: relative; width: 78px; height: 70px; background: #173b36; border-radius: 27px 27px 24px 24px; box-shadow: 0 7px 0 #97c9bc; display: flex; justify-content: center; gap: 22px; padding-top: 23px; }
+.character-eye { width: 7px; height: 9px; border-radius: 50%; background: #dcfff0; animation: notulist-blink 6s infinite; }
+.character-mouth { position: absolute; width: 22px; height: 8px; top: 43px; border-bottom: 3px solid #a4d4ca; border-radius: 0 0 12px 12px; }
+.voice-listening .character-halo { animation: notulist-breathe 2.5s ease-in-out infinite; }
+.voice-thinking .character-halo, .voice-connecting .character-halo { border: 3px dashed #71a99a; animation: notulist-spin 6s linear infinite; }
+.voice-speaking .character-halo { animation: notulist-breathe .8s ease-in-out infinite; background: #b8e4d4; }
+.voice-speaking .character-mouth { background: #a4d4ca; border: 0; height: 13px; border-radius: 50%; animation: notulist-talk .22s ease-in-out infinite alternate; }
+.voice-error .character-halo { background: #f6ddd5; }
+.voice-chat-heading { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .5rem; margin-top: 1.4rem; }
+.voice-chat-heading h3 { font-size: 1rem; margin: .5rem 0; }
+.voice-chat-heading span { color: #51636a; font-size: .78rem; }
+.voice-chat-log { max-height: 340px; overflow-y: auto; padding: .5rem .25rem; display: grid; gap: .75rem; }
+.voice-message { border-radius: 1rem; padding: .85rem 1rem; max-width: 90%; width: fit-content; overflow-wrap: anywhere; }
+.voice-message p { margin: .3rem 0 0; white-space: pre-wrap; line-height: 1.55; }
+.voice-message strong, .voice-message small { font-size: .75rem; }
+.voice-message-user { background: #e4f2ed; justify-self: end; }
+.voice-message-assistant { background: #edf1f4; }
+.voice-question { display: flex; gap: .6rem; margin-top: .9rem; }
+.voice-question input { min-width: 0; flex: 1; padding: .8rem 1rem; border: 1px solid #b2c9c4; border-radius: .8rem; font: inherit; background: #fff; }
+.voice-question button { flex-shrink: 0; }
+.voice-proposal { margin-top: 1.25rem; padding: 1.2rem; border-radius: 1rem; background: #fff7e6; border: 1px solid #ead09a; }
+.voice-proposal h3 { margin: .5rem 0; }
+.voice-proposal dl { display: flex; gap: 2rem; flex-wrap: wrap; }
+.voice-proposal dt { font-size: .8rem; color: #51636a; }
+.voice-proposal dd { margin: .2rem 0 0; font-weight: 700; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+button:focus-visible, input:focus-visible { outline: 3px solid #2b8477; outline-offset: 3px; }
+@keyframes notulist-blink { 0%, 45%, 49%, 100% { transform: scaleY(1); } 47% { transform: scaleY(.1); } }
+@keyframes notulist-breathe { 0%, 100% { transform: scale(.94); } 50% { transform: scale(1.08); } }
+@keyframes notulist-spin { to { transform: rotate(360deg); } }
+@keyframes notulist-talk { from { transform: scaleY(.25); } to { transform: scaleY(1); } }
+@media (max-width: 560px) { .voice-intro { gap: 1rem; align-items: flex-start; } .notulist-character { flex-basis: 78px; width: 78px; height: 90px; } .character-face { transform: scale(.85); } .voice-controls button { font-size: .82rem; } .voice-chat-heading { display: block; } .queue-actions { flex-wrap: wrap; justify-content: flex-end; } }
+@media (prefers-reduced-motion: reduce) { .character-halo, .character-eye, .character-mouth { animation: none !important; } }
