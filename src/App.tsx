@@ -168,12 +168,16 @@ export function App() {
   const isRecording = recording.status === "recording";
   const isPaused = recording.status === "paused";
 
-  if (user && !canUseApp(user)) {
+  if (!canUseApp(user)) {
     return <main className="shell"><section className="hero">
       <p className="eyebrow">AI Vergadersecretaris</p>
-      <h1>Geen toegang</h1>
-      <p role="alert">Dit Google-account heeft geen toegang tot deze privé-app.</p>
-      <button className="secondary-button" onClick={() => void signOutAccount()}>Uitloggen en ander account kiezen</button>
+      <h1>{user ? "Geen toegang" : "Log in om te beginnen"}</h1>
+      <p role={user ? "alert" : undefined}>{user
+        ? "Dit Google-account heeft geen toegang tot deze privé-app."
+        : "Deze app is alleen toegankelijk voor het toegestane Google-account."}</p>
+      {user
+        ? <button className="secondary-button" onClick={() => void signOutAccount()}>Uitloggen en ander account kiezen</button>
+        : <button className="secondary-button" onClick={() => void signIn()}>Log in met Google</button>}
       {error && <p className="error" role="alert">{error}</p>}
     </section></main>;
   }
