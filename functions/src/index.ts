@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { initializeApp } from "firebase-admin/app";
 import { getFirestore, Timestamp } from "firebase-admin/firestore";
 import { onCall, HttpsError } from "firebase-functions/v2/https";
@@ -7,6 +8,7 @@ import OpenAI, { toFile } from "openai";
 import { requireOwnerAccess } from "./access";
 
 initializeApp();
+export { createVoiceSession, updateMeetingActionItem } from "./voice";
 const db = getFirestore();
 const openAiApiKey = defineSecret("OPENAI_API_KEY");
 
@@ -168,8 +170,10 @@ export const generateMeetingNotes = onCall(
     }
 
     const notes = normalizeMeetingNotes(generated);
+    const revision = randomUUID();
     await db.doc(`users/${uid}/meetings/${input.meetingId}/notes/latest`).set({
       ownerId: uid,
+      revision,
       summary: notes.summary,
       decisions: notes.decisions,
       actionItems: notes.actionItems,
@@ -180,6 +184,7 @@ export const generateMeetingNotes = onCall(
 
     return {
       meetingId: input.meetingId,
+      revision,
       ...notes,
       model: "gpt-4o-mini",
     } satisfies MeetingNotesResult;
@@ -214,7 +219,7 @@ function isValidMeetingInput(input: Partial<{ meetingId: string }>): input is { 
   return typeof input.meetingId === "string" && /^[a-zA-Z0-9_-]{1,100}$/.test(input.meetingId);
 }
 
-function normalizeMeetingNotes(generated: GeneratedMeetingNotes): Omit<MeetingNotesResult, "meetingId" | "model"> {
+function normalizeMeetingNotes(generated: GeneratedMeetingNotes): Omit<MeetingNotesResult, "meetingId" | "model" | "revision"> {
   const clarificationQuestions = generated.clarificationQuestions.filter((question) => question.trim().length > 0);
   const actionItems = generated.actionItems
     .filter((item) => item.description.trim().length > 0)
@@ -289,6 +294,7 @@ interface GeneratedMeetingNotes {
 
 interface MeetingNotesResult {
   meetingId: string;
+  revision: string;
   summary: string;
   decisions: string[];
   actionItems: Array<{

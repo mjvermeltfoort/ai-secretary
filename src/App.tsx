@@ -8,6 +8,7 @@ import { transcribeLocalSegment, type TranscriptResult } from "./transcription/t
 import { IndexedDbSegmentStore } from "./recording/localSegmentStore";
 import { TranscriptQueue, type QueueSnapshot } from "./transcription/transcriptQueue";
 import { createMeetingNotes, type MeetingNotes } from "./notes/notesClient";
+import { VoicePanel } from "./voice/VoicePanel";
 
 const initialState: RecordingState = {
   status: "ready",
@@ -142,7 +143,8 @@ export function App() {
     setNotesLoading(true);
     try {
       if (!canUseApp(auth.currentUser)) throw new Error("Dit account heeft geen toegang tot deze app.");
-      setNotes(await createMeetingNotes(meetingId));
+      const generated = await createMeetingNotes(meetingId);
+      if (sessionIdRef.current === meetingId && canUseApp(auth.currentUser)) setNotes(generated);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Notulen maken mislukt.");
     } finally {
@@ -212,6 +214,9 @@ export function App() {
         </div>
         {error && <p className="error" role="alert">{error}</p>}
       </section>
+
+      <VoicePanel key={meetingId} meetingId={meetingId} transcripts={transcripts} notes={notes}
+        onNotesUpdated={(updated) => { if (sessionIdRef.current === updated.meetingId) setNotes(updated); }} />
 
       <section className="transcript-card">
         <div className="transcript-heading">
