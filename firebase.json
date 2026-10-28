@@ -7,7 +7,10 @@
     "rules": "storage.rules"
   },
   "auth": {
-    "authorizedDomains": ["localhost", "127.0.0.1"],
+    "authorizedDomains": [
+      "localhost",
+      "127.0.0.1"
+    ],
     "providers": {
       "googleSignIn": {
         "oAuthBrandDisplayName": "AI Vergadersecretaris",
@@ -20,10 +23,35 @@
     "runtime": "nodejs22"
   },
   "emulators": {
-    "auth": { "port": 9099 },
-    "firestore": { "port": 8080 },
-    "storage": { "port": 9199 },
-    "functions": { "port": 5001 },
-    "ui": { "enabled": true, "port": 4000 }
+    "auth": {
+      "port": 9099
+    },
+    "firestore": {
+      "port": 8080
+    },
+    "storage": {
+      "port": 9199
+    },
+    "functions": {
+      "port": 5001
+    },
+    "ui": {
+      "enabled": true,
+      "port": 4000
+    }
+  },
+  "hosting": {
+    "public": "dist",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "rewrites": [
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ]
   }
 }
