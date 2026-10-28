@@ -6,6 +6,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   web:
@@ -35,20 +36,13 @@ jobs:
         run: npm run build
       - run: npm --prefix functions install
       - run: npm --prefix functions run build
-      - name: Check Firebase deploy credentials
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        env:
-          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_AI_VERGADERSECRETARIS }}
-        run: |
-          if [ -z "$FIREBASE_SERVICE_ACCOUNT" ]; then
-            echo "::error::Add the repository Actions secret FIREBASE_SERVICE_ACCOUNT_AI_VERGADERSECRETARIS."
-            exit 1
-          fi
       - name: Authenticate to Google Cloud
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: google-github-actions/auth@v2
         with:
-          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_AI_VERGADERSECRETARIS }}
+          project_id: ai-vergadersecretaris
+          workload_identity_provider: projects/264157825639/locations/global/workloadIdentityPools/github-actions/providers/github
+          service_account: github-firebase-deploy@ai-vergadersecretaris.iam.gserviceaccount.com
       - name: Deploy Firebase
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: npx -y firebase-tools@latest deploy --project ai-vergadersecretaris --only auth,firestore,functions,hosting --non-interactive
