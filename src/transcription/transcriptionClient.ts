@@ -7,6 +7,8 @@ export interface TranscriptResult {
   sequence: number;
   text: string;
   model: string;
+  provisional?: boolean;
+  overlapUncertain?: boolean;
 }
 
 interface TranscribeSegmentRequest {

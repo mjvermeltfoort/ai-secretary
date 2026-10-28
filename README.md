@@ -50,3 +50,9 @@ Firebase-project `ai-vergadersecretaris` bestaat. Web- en Android-app zijn gereg
 Kies **Praat met de notulist** voor een live gesprek met spraak en tekst.
 Zie [LIVE_NOTULIST.md](docs/LIVE_NOTULIST.md) voor bediening, bevestigde
 actiepuntcorrecties, architectuur en de eerste praktijktest.
+
+## Doorlopende vergadering
+
+Opnemen, live transcriptie en overleg met de notulist zijn één sessie.
+Zie [CONTINUOUS_MEETING.md](docs/CONTINUOUS_MEETING.md) voor de doorlopende
+opname, controle na afloop en lokaal herstel. Sprekerherkenning is niet toegevoegd.

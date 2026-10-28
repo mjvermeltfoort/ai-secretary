@@ -1,3 +1,8 @@
+> Deze functionaliteit is nu onderdeel van één doorlopende vergadering.
+> Zie [CONTINUOUS_MEETING.md](CONTINUOUS_MEETING.md) voor de actuele opname-,
+> live-transcriptie- en herstelopzet. Tijdens opname deelt overleg de
+> microfoonbron via een clone; beide verbindingen behouden hun eigen lifecycle.
+
 # Live notulist — eerste versie
 
 ## Gebruik

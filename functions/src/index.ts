@@ -9,6 +9,7 @@ import { requireOwnerAccess } from "./access";
 
 initializeApp();
 export { createVoiceSession, updateMeetingActionItem } from "./voice";
+export { createTranscriptionSession, transcribeAudioWindow, finalizeReviewedTranscript } from "./transcription";
 const db = getFirestore();
 const openAiApiKey = defineSecret("OPENAI_API_KEY");
 
@@ -106,7 +107,8 @@ export const generateMeetingNotes = onCall(
       .collection(`users/${uid}/meetings/${input.meetingId}/transcripts`)
       .orderBy("sequenceStart")
       .get();
-    const transcript = transcriptSnapshot.docs
+    const reviewed = (await db.doc(`users/${uid}/meetings/${input.meetingId}/transcriptRuns/latest`).get()).data();
+    const transcript = typeof reviewed?.text === "string" ? reviewed.text : transcriptSnapshot.docs
       .map((document) => document.data())
       .filter((document) => document.status === "final" && typeof document.text === "string")
       .map((document) => `Segment ${document.sequenceStart}: ${document.text.trim()}`)
@@ -135,7 +137,7 @@ export const generateMeetingNotes = onCall(
               text: [
                 "Je bent een Nederlandse notulist.",
                 "Gebruik alleen informatie uit de transcriptie.",
-                "Verzin geen namen, deadlines, besluiten of feiten.",
+                "Verzin geen namen, deadlines, besluiten of feiten. Vragen aan de AI en AI-suggesties zijn geen toezeggingen of besluiten. Leid geen feiten af uit [onverstaanbaar] of [door elkaar gesproken].",
                 "Gebruik lege strings voor onbekende eigenaar of deadline.",
                 "Maak actiepunten concreet en neem alleen echte toezeggingen op.",
                 "Antwoord uitsluitend volgens het opgegeven JSON-schema.",
