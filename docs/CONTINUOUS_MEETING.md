@@ -4,9 +4,11 @@
 
 **Start vergadering** start één doorlopende microfoonopname. De live tekst en
 het overleg met de notulist gebruiken dezelfde vergadering. **Praat met de
-notulist** opent het overleg met de actuele transcriptie als context. Tijdens een
+notulist** bereidt een samenvatting van de beschikbare afgeronde transcriptie voor en opent daarmee het overleg. De algemene samenvatting is ook zichtbaar en afzonderlijk bij te werken onder **Wat is er besproken?**. Tijdens een
 opname gebruikt dit overleg een eigen clone van dezelfde microfoonbron; stoppen
-met overleggen stopt de recorder niet. De AI-antwoorden worden afzonderlijk
+met overleggen stopt de recorder niet. Aanspreken met **Kneut** opent hetzelfde
+gesprek als de gespreksknop en sluit de live transcriptieverbinding tijdelijk.
+**Terug naar meeluisteren** hervat die verbinding en werkt opgeslagen audio bij. De AI-antwoorden worden afzonderlijk
 weergegeven en zijn geen officiële vergaderbesluiten. Actiepuntwijzigingen blijven
 voorstellen die expliciet bevestigd moeten worden.
 

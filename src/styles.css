@@ -73,11 +73,11 @@ h1 { max-width: 760px; margin: 1rem 0; font-size: clamp(2.5rem, 8vw, 6rem); line
 .character-face { position: relative; width: 78px; height: 70px; background: #173b36; border-radius: 27px 27px 24px 24px; box-shadow: 0 7px 0 #97c9bc; display: flex; justify-content: center; gap: 22px; padding-top: 23px; }
 .character-eye { width: 7px; height: 9px; border-radius: 50%; background: #dcfff0; animation: notulist-blink 6s infinite; }
 .character-mouth { position: absolute; width: 22px; height: 8px; top: 43px; border-bottom: 3px solid #a4d4ca; border-radius: 0 0 12px 12px; }
-.voice-listening .character-halo { animation: notulist-breathe 2.5s ease-in-out infinite; }
-.voice-thinking .character-halo, .voice-connecting .character-halo { border: 3px dashed #71a99a; animation: notulist-spin 6s linear infinite; }
-.voice-speaking .character-halo { animation: notulist-breathe .8s ease-in-out infinite; background: #b8e4d4; }
-.voice-speaking .character-mouth { background: #a4d4ca; border: 0; height: 13px; border-radius: 50%; animation: notulist-talk .22s ease-in-out infinite alternate; }
-.voice-error .character-halo { background: #f6ddd5; }
+.voice-state-listening .character-halo { animation: notulist-breathe 2.5s ease-in-out infinite; }
+.voice-state-thinking .character-halo, .voice-state-connecting .character-halo { border: 3px dashed #71a99a; animation: notulist-spin 6s linear infinite; }
+.voice-state-speaking .character-halo { animation: notulist-breathe .8s ease-in-out infinite; background: #b8e4d4; }
+.voice-state-speaking .character-mouth { background: #a4d4ca; border: 0; height: 13px; border-radius: 50%; animation: notulist-talk .22s ease-in-out infinite alternate; }
+.voice-state-error .character-halo { background: #f6ddd5; }
 .voice-chat-heading { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .5rem; margin-top: 1.4rem; }
 .voice-chat-heading h3 { font-size: 1rem; margin: .5rem 0; }
 .voice-chat-heading span { color: #51636a; font-size: .78rem; }
@@ -114,3 +114,6 @@ button:focus-visible, input:focus-visible { outline: 3px solid #2b8477; outline-
 .hero h1 { font-size: clamp(2rem, 4vw, 3.25rem); line-height: 1.05; margin: .65rem 0; }
 .hero .intro { max-width: 70ch; font-size: 1rem; margin: .75rem 0; }
 @media (max-width: 560px) { .shell > .hero { padding: 1.25rem; } .transcript-heading { flex-wrap: wrap; } .queue-actions { justify-content: flex-start; } .status-card { flex-wrap: wrap; gap: 1rem; } }
+
+.meeting-summary { margin-top: 1.25rem; padding-top: .75rem; border-top: 1px solid #d9e6e2; }
+.summary-text { white-space: pre-line; overflow-wrap: anywhere; line-height: 1.6; }

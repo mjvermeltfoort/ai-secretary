@@ -3,13 +3,15 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MeetingNotes } from "../notes/notesClient";
 
-const rig = vi.hoisted(() => ({ options: null as any, start: vi.fn(), disconnect: vi.fn(), sendText: vi.fn(), updateContext: vi.fn(), notifyDecision: vi.fn(), save: vi.fn(), assess: vi.fn(), speakControlled: vi.fn(), interrupt: vi.fn() }));
+const rig = vi.hoisted(() => ({ options: null as any, start: vi.fn(), startDialogue: vi.fn(), disconnect: vi.fn(), sendText: vi.fn(), updateContext: vi.fn(), notifyDecision: vi.fn(), save: vi.fn(), prepare: vi.fn(), assess: vi.fn(), speakControlled: vi.fn(), interrupt: vi.fn() }));
 vi.mock("../notes/notesClient", () => ({ saveActionItemProposal: rig.save }));
+vi.mock("./voiceBriefing",()=>({prepareVoiceBriefing:rig.prepare}));
 vi.mock("./kneutClient", () => ({ assessClarity: rig.assess }));
 vi.mock("./voiceClient", () => ({ createVoiceToken: vi.fn() }));
 vi.mock("./voiceSession", () => ({ VoiceSession: class {
   constructor(options: any) { rig.options = options; }
   start = rig.start;
+  startDialogue = rig.startDialogue;
   disconnect = rig.disconnect;
   sendText = rig.sendText;
   updateContext = rig.updateContext;
@@ -23,15 +25,15 @@ const notes: MeetingNotes = { meetingId: "m1", revision: "rev1", summary: "Vrijd
 const proposal = { notesRevision: "rev1", itemIndex: 0, description: "Planning maken", owner: "Sarah", deadline: "Donderdag" };
 const onNotesUpdated = vi.fn();
 function panel(current = notes) { return <VoicePanel meetingId="m1" notes={current} transcripts={[]} onNotesUpdated={onNotesUpdated} />; }
-beforeEach(() => { vi.clearAllMocks(); localStorage.clear(); });
+beforeEach(() => { vi.clearAllMocks(); rig.startDialogue.mockResolvedValue(true);rig.prepare.mockImplementation(async(_id,transcripts)=>({summary:"Samenvatting",sourceText:transcripts.filter((t:any)=>!t.provisional||t.liveFinal).map((t:any)=>t.text.trim()).join("\n"),provisional:true}));localStorage.clear(); });
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 
 describe("voice panel", () => {
-  it("never starts a paid connection automatically and closes on unmount", () => {
+  it("never starts a paid connection automatically and closes on unmount", async () => {
     const view = render(panel());
-    expect(rig.start).not.toHaveBeenCalled();
+    expect(rig.startDialogue).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Praat met de notulist" }));
-    expect(rig.start).toHaveBeenCalledOnce();
+    await waitFor(()=>expect(rig.startDialogue).toHaveBeenCalledOnce());
     view.unmount();
     expect(rig.disconnect).toHaveBeenCalledOnce();
   });
@@ -76,7 +78,7 @@ describe("Kneut meeting integration", () => {
     let speechAt = Date.now()-10000;
     const getSpeechActivity = () => ({lastSpeechAt:speechAt,lastFrameAt:Date.now()});
     const open = {id:"kleding",question:"Wie bestelt de kleding?",evidence:"We bestellen kleding."};
-    rig.assess.mockResolvedValue({questions:[open],transition:false});rig.speakControlled.mockResolvedValue(true);
+    rig.assess.mockResolvedValue({questions:[open],transition:false});rig.speakControlled.mockResolvedValue(true);rig.startDialogue.mockResolvedValue(true);
     const props = {meetingId:"m1",onNotesUpdated,recording:true,liveAvailable:true,getSpeechActivity};
     const view=render(<VoicePanel {...props} transcripts={[]} />);
     view.rerender(<VoicePanel {...props} transcripts={[{meetingId:"m1",sequence:1,text:"We bestellen kleding. Welke kleur?",model:"test",provisional:true,liveFinal:true}]} />);
@@ -84,8 +86,7 @@ describe("Kneut meeting integration", () => {
     expect(screen.getByText(open.question)).toBeTruthy();expect(rig.speakControlled).not.toHaveBeenCalled();
     view.rerender(<VoicePanel {...props} transcripts={[{meetingId:"m1",sequence:1,text:"We bestellen kleding. Welke kleur?",model:"test",provisional:true,liveFinal:true},{meetingId:"m1",sequence:2,text:"Kneut, wat is besloten?",model:"test",provisional:true,liveFinal:true}]} />);
     await act(async()=>{await vi.advanceTimersByTimeAsync(300);});
-    expect(rig.speakControlled).toHaveBeenCalledWith("wat is besloten?",expect.any(Function));
-    const allowed=rig.speakControlled.mock.calls[0][1];speechAt=Date.now();expect(allowed()).toBe(false);
+    expect(rig.startDialogue).toHaveBeenCalledWith("wat is besloten?","Kneut, wat is besloten?");
     fireEvent.click(screen.getByRole("button",{name:"Bewaar vragen tot het einde"}));
     expect(JSON.parse(localStorage.getItem("kneut-m1")!).deferred).toBe(true);
     view.rerender(<VoicePanel {...props} recording={false} stopSignal={1} transcripts={[]} />);
@@ -100,4 +101,44 @@ it("never treats restored or replayed text as a new wake word",async()=>{
  const view=render(<VoicePanel {...props} transcripts={[]} />);
  view.rerender(<VoicePanel {...props} transcripts={[{meetingId:"m1",sequence:1,text:"Kneut, wat is besloten?",model:"test",provisional:true,liveFinal:true,replayed:true}]} />);
  await act(async()=>{await vi.advanceTimersByTimeAsync(1000);});expect(rig.speakControlled).not.toHaveBeenCalled();expect(rig.assess).not.toHaveBeenCalled();
+});
+
+it("scopes the red error style to the alert and exposes concise diagnostic details",()=>{
+ render(panel());act(()=>rig.options.onSnapshot({status:"error",micMuted:false,playbackBlocked:false,error:"Verzoek niet verwerkt",diagnostic:{code:"invalid_value",parameter:"item.id",event:"conversation.item.create"}}));
+ expect(screen.getByRole("region",{name:"Kneut, je notulist"}).classList.contains("voice-error")).toBe(false);
+ expect(screen.getByRole("alert").classList.contains("voice-error")).toBe(true);
+ expect(screen.getByText("Technische foutgegevens")).toBeTruthy();expect(screen.getByText(/Code: invalid_value/)).toBeTruthy();
+});
+
+it("switches to dialogue on wake and restores listening when the conversation closes",async()=>{
+ vi.useFakeTimers();vi.setSystemTime(new Date("2026-10-29T13:00:00Z"));const change=vi.fn();
+ const props={meetingId:"m1",onNotesUpdated,onConsultationChange:change,recording:true,liveAvailable:true,getSpeechActivity:()=>({lastSpeechAt:Date.now()-10000,lastFrameAt:Date.now()})};
+ const view=render(<VoicePanel {...props} transcripts={[]} />);
+ view.rerender(<VoicePanel {...props} transcripts={[{meetingId:"m1",sequence:1,text:"Kneut, wat is besproken?",model:"test",provisional:true,liveFinal:true}]} />);
+ await act(async()=>{await vi.advanceTimersByTimeAsync(300);});
+ expect(change).toHaveBeenCalledWith(true);expect(rig.startDialogue).toHaveBeenCalledWith("wat is besproken?","Kneut, wat is besproken?");
+ expect(rig.speakControlled).not.toHaveBeenCalled();
+ act(()=>rig.options.onSnapshot({status:"listening",controlled:false,micMuted:false,playbackBlocked:false}));
+ expect(screen.getByRole("button",{name:"Terug naar meeluisteren"})).toBeTruthy();
+ act(()=>rig.options.onSnapshot({status:"idle",controlled:false,micMuted:false,playbackBlocked:false}));
+ expect(change).toHaveBeenLastCalledWith(false);
+});
+
+it("shows a general summary and reuses it when the conversation starts",async()=>{
+ const transcript={meetingId:"m1",sequence:1,text:"Nieuwe kleding besproken. Mark vraagt offertes op.",model:"test"};
+ render(<VoicePanel meetingId="m1" transcripts={[transcript]} onNotesUpdated={onNotesUpdated}/>);
+ fireEvent.click(screen.getByRole("button",{name:"Maak algemene samenvatting"}));await screen.findByText("Samenvatting",{exact:true});
+ expect(rig.prepare).toHaveBeenCalledOnce();fireEvent.click(screen.getByRole("button",{name:"Praat met de notulist"}));
+ await waitFor(()=>expect(rig.startDialogue).toHaveBeenCalledOnce());expect(rig.prepare).toHaveBeenCalledOnce();
+ expect(JSON.parse(rig.options.getContext()).briefing.summary).toBe("Samenvatting");
+});
+it("waits for a shared summary and never starts speech after preparation is cancelled",async()=>{
+ let resolve!:(value:any)=>void;rig.prepare.mockImplementationOnce(()=>new Promise(done=>{resolve=done;}));
+ const transcript={meetingId:"m1",sequence:1,text:"Kleding besproken.",model:"test"};
+ render(<VoicePanel meetingId="m1" transcripts={[transcript]} onNotesUpdated={onNotesUpdated}/>);
+ fireEvent.click(screen.getByRole("button",{name:"Praat met de notulist"}));
+ expect(screen.getByText("Kneut leest de vergadering bij…")).toBeTruthy();
+ fireEvent.click(screen.getByRole("button",{name:"Voorbereiden annuleren"}));
+ await act(async()=>{resolve({summary:"Kleding besproken.",sourceText:transcript.text,provisional:false});await Promise.resolve();});
+ expect(rig.startDialogue).not.toHaveBeenCalled();
 });

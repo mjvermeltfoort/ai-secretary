@@ -3,7 +3,7 @@ import { parseActionItemProposal, type VoiceActionItemProposal } from "./voiceCo
 export type VoiceStatus = "idle" | "connecting" | "listening" | "thinking" | "speaking" | "error";
 export interface VoiceToken { value: string; expiresAt: number; model: string; instructions: string; }
 export interface VoiceMessage { id: string; role: "user" | "assistant"; text: string; final: boolean; interrupted?: boolean; }
-export interface VoiceSnapshot { status: VoiceStatus; micMuted: boolean; playbackBlocked: boolean; error?: string; controlled?: boolean; }
+export interface VoiceSnapshot { status: VoiceStatus; micMuted: boolean; playbackBlocked: boolean; error?: string; controlled?: boolean; diagnostic?: { code: string; parameter?: string; event?: string }; }
 interface VoiceOptions {
   audio: HTMLAudioElement;
   createToken: () => Promise<VoiceToken>;
@@ -26,6 +26,9 @@ export class VoiceSession {
   private lastContext = "";
   private responding = false;
   private requested = false;
+  private waitingForDone = false;
+  private pendingResponse = false;
+  private sentEvents = new Map<string, string>();
   private controlled = false;
   private playing = false;
   private suppressAudio = false;
@@ -44,7 +47,7 @@ export class VoiceSession {
     }
     this.controlled = controlled;
     const generation = ++this.generation;
-    this.emit({ status: "connecting", micMuted: controlled, controlled, playbackBlocked: false, error: undefined });
+    this.emit({ status: "connecting", micMuted: controlled, controlled, playbackBlocked: false, error: undefined, diagnostic: undefined });
     try {
       if (!navigator.mediaDevices?.getUserMedia || typeof RTCPeerConnection === "undefined") {
         throw new Error("Deze browser ondersteunt geen live spraak. Gebruik een recente versie van Chrome.");
@@ -115,7 +118,7 @@ export class VoiceSession {
     } } } });
   }
 
-  async speakControlled(text: string, stillAllowed: () => boolean): Promise<boolean> {
+  async speakControlled(text: string, stillAllowed: () => boolean, displayText?: string): Promise<boolean> {
     if (!stillAllowed() || (!this.controlled && !["idle", "error"].includes(this.state.status))) return false;
     await this.start(true);
     if (["idle", "error"].includes(this.state.status)) return false;
@@ -129,7 +132,21 @@ export class VoiceSession {
       await new Promise(resolve => setTimeout(resolve, 50));
     }
     if (generation !== this.generation || !this.controlled || !stillAllowed()) return false;
-    this.sendText(text.slice(0, 2000));
+    this.sendText(text.slice(0, 2000), displayText ?? null);
+    return true;
+  }
+
+  async startDialogue(text?: string, displayText?: string): Promise<boolean> {
+    await this.start(false);
+    if (["idle", "error"].includes(this.state.status)) return false;
+    const generation = this.generation;
+    const until = Date.now() + 30000;
+    while (this.channel?.readyState !== "open") {
+      if (generation !== this.generation || Date.now() >= until) return false;
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    if (generation !== this.generation || this.controlled) return false;
+    if (text) this.sendText(text.slice(0, 2000), displayText ?? null);
     return true;
   }
 
@@ -143,18 +160,25 @@ export class VoiceSession {
     this.lastContext = context;
   }
 
-  sendText(text: string): void {
+  sendText(text: string, displayText: string | null = text): void {
     const value = text.trim();
     if (!value || value.length > 2000 || this.channel?.readyState !== "open") return;
     this.interrupt();
     this.updateContext();
-    const id = `user_${crypto.randomUUID().replaceAll("-", "")}`;
+    const id = crypto.randomUUID().replaceAll("-", "");
     this.send({ type: "conversation.item.create", item: { id, type: "message", role: "user", content: [{ type: "input_text", text: value }] } });
-    this.publish({ id, role: "user", text: value, final: true });
-    this.suppressAudio = false;
-    this.requested = true;
+    if (displayText?.trim()) this.publish({ id, role: "user", text: displayText.trim(), final: true });
+    this.pendingResponse = true;
+    if (!this.waitingForDone) this.beginResponse();
+    else this.emit({ status: "thinking", error: undefined, diagnostic: undefined });
+  }
+
+  private beginResponse(): void {
+    if (this.channel?.readyState !== "open" || this.waitingForDone) return;
+    this.pendingResponse = false; this.waitingForDone = true;
+    this.suppressAudio = false; this.requested = true;
     this.send({ type: "response.create" });
-    this.emit({ status: "thinking" });
+    this.emit({ status: "thinking", error: undefined, diagnostic: undefined });
   }
 
   notifyDecision(text: string): void {
@@ -171,8 +195,9 @@ export class VoiceSession {
   }
 
   interrupt(manual = true): void {
-    if (manual && (this.responding || this.requested)) this.send({ type: "response.cancel" });
+    if (manual && (this.responding || this.requested || this.waitingForDone)) this.send({ type: "response.cancel" });
     if (manual && this.playing) this.send({ type: "output_audio_buffer.clear" });
+    this.pendingResponse = false;
     this.options.audio.muted = true;
     this.suppressAudio = true;
     this.responding = false;
@@ -211,12 +236,13 @@ export class VoiceSession {
     this.playing = false;
     this.lastContext = "";
     this.suppressAudio = false;
-    this.emit({ status: "idle", micMuted: false, controlled: false, playbackBlocked: false });
+    this.waitingForDone = false; this.pendingResponse = false; this.sentEvents.clear();
+    this.emit({ status: "idle", micMuted: false, controlled: false, playbackBlocked: false, diagnostic: undefined });
   }
 
-  private fail(error: string): void {
+  private fail(error: string, diagnostic?: VoiceSnapshot["diagnostic"]): void {
     this.disconnect();
-    this.emit({ status: "error", error });
+    this.emit({ status: "error", error, diagnostic });
   }
 
   private emit(update: Partial<VoiceSnapshot>): void {
@@ -225,7 +251,12 @@ export class VoiceSession {
   }
 
   private send(event: Record<string, unknown>): void {
-    if (this.channel?.readyState === "open") this.channel.send(JSON.stringify(event));
+    if (this.channel?.readyState === "open") {
+      const event_id = `evt_${crypto.randomUUID().replaceAll("-", "")}`;
+      this.sentEvents.set(event_id, String(event.type));
+      if (this.sentEvents.size > 50) this.sentEvents.delete(this.sentEvents.keys().next().value!);
+      this.channel.send(JSON.stringify({ ...event, event_id }));
+    }
   }
 
   private publish(message: VoiceMessage): void {
@@ -246,6 +277,7 @@ export class VoiceSession {
         this.emit({ status: "thinking" });
         break;
       case "response.created":
+        this.waitingForDone = true;
         this.requested = false;
         if (this.suppressAudio) { this.send({ type: "response.cancel" }); break; }
         this.responding = true;
@@ -259,7 +291,7 @@ export class VoiceSession {
       case "output_audio_buffer.stopped":
       case "output_audio_buffer.cleared":
         this.playing = false;
-        this.emit({ status: this.responding ? "thinking" : "listening" });
+        this.emit({ status: this.responding || this.requested || this.waitingForDone ? "thinking" : "listening" });
         break;
       case "response.output_audio_transcript.delta":
       case "response.output_text.delta": {
@@ -279,7 +311,8 @@ export class VoiceSession {
         this.emit({ error: "Je vraag kon niet als tekst worden uitgeschreven. Je kunt de vraag ook typen." });
         break;
       case "response.done": {
-        this.responding = false;
+        this.responding = false; this.requested = false; this.waitingForDone = false;
+        if (this.pendingResponse) { this.beginResponse(); break; }
         const calls = event.response?.status === "completed" && Array.isArray(event.response?.output) ? event.response.output.filter((item: any) => item.type === "function_call") : [];
         for (const call of calls) {
           let result = "Dit voorstel kon niet worden verwerkt.";
@@ -289,14 +322,24 @@ export class VoiceSession {
           } catch { /* Report a failed tool call without modifying notes. */ }
           this.send({ type: "conversation.item.create", item: { type: "function_call_output", call_id: call.call_id, output: JSON.stringify({ result }) } });
         }
-        if (calls.length) { this.updateContext(); this.send({ type: "response.create" }); }
+        if (calls.length) { this.updateContext(); this.beginResponse(); }
         else if (event.response?.status === "failed") this.emit({ error: "De notulist kon geen antwoord geven. Probeer je vraag opnieuw." });
         this.emit({ status: this.playing ? "speaking" : calls.length ? "thinking" : "listening" });
         break;
       }
       case "error":
         if (event.error?.code === "response_cancel_not_active") break;
-        this.fail("De spraakdienst kon je verzoek niet verwerken. Stop en start het gesprek opnieuw.");
+        {
+          const rawCode = event.error?.code;
+          const code = typeof rawCode === "string" && /^[a-z][a-z0-9_]{0,79}$/.test(rawCode) && !/^(?:sk|ek)_/.test(rawCode) ? rawCode : "unknown_error";
+          const rawParam = event.error?.param;
+          const parameter = typeof rawParam === "string" && /^(?:item|session|response|audio|input)[a-z0-9_.\[\]]{0,79}$/.test(rawParam) ? rawParam : undefined;
+          const diagnostic = { code, parameter, event: this.sentEvents.get(event.error?.event_id) };
+          const message = ["rate_limit_exceeded", "insufficient_quota"].includes(code)
+            ? "De spraakdienst heeft zijn gebruikslimiet bereikt. Probeer het later opnieuw."
+            : "De spraakdienst kon je verzoek niet verwerken. Start het gesprek opnieuw; hieronder staan de technische foutgegevens.";
+          this.fail(message, diagnostic);
+        }
         break;
     }
   }

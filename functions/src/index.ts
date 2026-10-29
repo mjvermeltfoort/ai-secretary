@@ -8,6 +8,7 @@ import OpenAI, { toFile } from "openai";
 import { requireOwnerAccess } from "./access";
 
 initializeApp();
+export { summarizeVoiceContext } from "./voiceBriefing";
 export { assessMeetingClarity } from "./kneut";
 export { createVoiceSession, updateMeetingActionItem } from "./voice";
 export { createTranscriptionSession, transcribeAudioWindow, finalizeReviewedTranscript } from "./transcription";
