@@ -8,6 +8,7 @@ import OpenAI, { toFile } from "openai";
 import { requireOwnerAccess } from "./access";
 
 initializeApp();
+export { assessMeetingClarity } from "./kneut";
 export { createVoiceSession, updateMeetingActionItem } from "./voice";
 export { createTranscriptionSession, transcribeAudioWindow, finalizeReviewedTranscript } from "./transcription";
 const db = getFirestore();
@@ -125,6 +126,7 @@ export const generateMeetingNotes = onCall(
     const apiKey = openAiApiKey.value();
     if (!apiKey) throw new HttpsError("failed-precondition", "OPENAI_API_KEY ontbreekt in Secret Manager.");
 
+    const openQuestions = (await db.doc(`users/${uid}/meetings/${input.meetingId}/kneut/latest`).get()).data()?.assessment?.questions ?? [];
     const client = new OpenAI({ apiKey });
     const response = await client.responses.create({
       model: "gpt-4o-mini",
@@ -140,6 +142,7 @@ export const generateMeetingNotes = onCall(
                 "Verzin geen namen, deadlines, besluiten of feiten. Vragen aan de AI en AI-suggesties zijn geen toezeggingen of besluiten. Leid geen feiten af uit [onverstaanbaar] of [door elkaar gesproken].",
                 "Gebruik lege strings voor onbekende eigenaar of deadline.",
                 "Maak actiepunten concreet en neem alleen echte toezeggingen op.",
+                "Controleer eerder gesignaleerde onduidelijkheden met de volledige transcriptie. Neem alleen nog onbeantwoorde punten op in clarificationQuestions. Open vragen zijn geen feiten of besluiten.",
                 "Antwoord uitsluitend volgens het opgegeven JSON-schema.",
               ].join(" "),
             },
@@ -147,7 +150,7 @@ export const generateMeetingNotes = onCall(
         },
         {
           role: "user",
-          content: [{ type: "input_text", text: transcript }],
+          content: [{ type: "input_text", text: JSON.stringify({ transcript, previouslyUnclear: openQuestions }) }],
         },
       ],
       text: {

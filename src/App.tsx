@@ -34,6 +34,7 @@ export function App() {
   const recorder = useRef<BrowserRecorder | null>(null);
   const store = useRef(new IndexedDbSegmentStore());
   const live = useRef<LiveTranscription | null>(null);
+  const speech = useRef({ lastSpeechAt: Date.now(), lastFrameAt: 0 });
   const reviewPromise = useRef<Promise<TranscriptResult[]> | null>(null);
   const [liveState, setLiveState] = useState<LiveState>("idle");
   const [reviewed, setReviewed] = useState(false);
@@ -92,7 +93,13 @@ export function App() {
   useEffect(() => {
     const instance = new BrowserRecorder({
       store: store.current,
-      onAudio: samples => live.current?.push(samples),
+      onAudio: samples => {
+        const now = Date.now();
+        const rms = Math.sqrt(samples.reduce((sum, sample) => sum + (sample / 32768) ** 2, 0) / Math.max(1, samples.length));
+        speech.current.lastFrameAt = now;
+        if (rms >= 0.008) speech.current.lastSpeechAt = now;
+        live.current?.push(samples);
+      },
       onSegment: () => { setRecording(instance.recordingState); setReviewed(false); },
       onError: cause => { setError(cause.message); setRecording({ ...instance.recordingState, status: "stopped" }); live.current?.close(); },
     });
@@ -263,7 +270,7 @@ export function App() {
           {(isRecording || isPaused) && <button className="secondary-button" onClick={() => void stop()} disabled={transitioning}>Rond vergadering af</button>}
         </div>
       <div className="meeting-workspace-heading"><h2>Deze vergadering</h2><p>{isRecording ? "Opname loopt · overleg gerust tussendoor" : isPaused ? "Opname gepauzeerd · overleg blijft beschikbaar" : "Opname, tekst en overleg op één plek"}</p></div>
-      <VoicePanel key={meetingId} meetingId={meetingId} transcripts={transcripts} notes={notes} stopSignal={stopSignal} getMicrophone={() => recorder.current?.cloneMicrophone()}
+      <VoicePanel key={meetingId} meetingId={meetingId} transcripts={transcripts} notes={notes} stopSignal={stopSignal} getMicrophone={() => recorder.current?.cloneMicrophone()} recording={isRecording} liveAvailable={liveState === "live"} getSpeechActivity={() => ({ ...speech.current, transcriptPending: live.current?.unsettled ?? true })}
         onNotesUpdated={(updated) => { if (sessionIdRef.current === updated.meetingId) setNotes(updated); }} />
 
       <section className="transcript-card">

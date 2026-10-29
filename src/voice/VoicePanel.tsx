@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { MeetingNotes, ActionItemProposal } from "../notes/notesClient";
 import { saveActionItemProposal } from "../notes/notesClient";
 import type { TranscriptResult } from "../transcription/transcriptionClient";
+import { KneutController, type KneutState } from "./kneutController";
+import { assessClarity } from "./kneutClient";
 import { createVoiceToken } from "./voiceClient";
 import { meetingVoiceContext } from "./voiceContext";
 import { VoiceSession, type VoiceMessage, type VoiceSnapshot } from "./voiceSession";
@@ -13,8 +15,23 @@ interface Props {
   onNotesUpdated: (notes: MeetingNotes) => void;
   getMicrophone?: () => MediaStream | undefined;
   stopSignal?: number;
+  recording?: boolean;
+  liveAvailable?: boolean;
+  getSpeechActivity?: () => { lastSpeechAt: number; lastFrameAt: number; transcriptPending?: boolean };
 }
 interface PendingProposal { proposal: ActionItemProposal; expectedRevision: string; }
+function savedKneut(meetingId: string): KneutState {
+  try {
+    const saved = JSON.parse(localStorage.getItem(`kneut-${meetingId}`) ?? "null");
+    if (saved && typeof saved.deferred === "boolean" && Array.isArray(saved.questions) && saved.questions.length <= 8
+      && saved.questions.every((q: any) => typeof q.id === "string" && typeof q.question === "string" && typeof q.evidence === "string")) {
+      return { questions: saved.questions, deferred: saved.deferred, listening: false,
+        askedIds: Array.isArray(saved.askedIds) ? saved.askedIds.filter((id: unknown) => typeof id === "string").slice(-1000) : [],
+        lastIntervention: typeof saved.lastIntervention === "number" ? saved.lastIntervention : undefined };
+    }
+  } catch { /* Local state is optional; recording works without browser storage. */ }
+  return { questions: [], deferred: false, listening: false };
+}
 const initial: VoiceSnapshot = { status: "idle", micMuted: false, playbackBlocked: false };
 const labels = { idle: "Luistert stil mee via het transcript", connecting: "Verbinding maken…", listening: "Luistert naar je vraag", thinking: "Denkt na…", speaking: "Spreekt", error: "Gesprek niet verbonden" };
 
@@ -32,6 +49,9 @@ export function VoicePanel(props: Props) {
   const [saving, setSaving] = useState(false);
   const [editError, setEditError] = useState<string>();
   const [notice, setNotice] = useState<string>();
+  const controller = useRef<KneutController | null>(null);
+  const snapshotRef = useRef(snapshot); snapshotRef.current = snapshot;
+  const [kneut, setKneut] = useState<KneutState>(() => savedKneut(props.meetingId));
   const chatLog = useRef<HTMLDivElement>(null);
   const active = !["idle", "error"].includes(snapshot.status);
   const connected = active && snapshot.status !== "connecting";
@@ -71,6 +91,36 @@ export function VoicePanel(props: Props) {
       voice.disconnect();
       session.current = null;
     };
+  }, [props.meetingId]);
+
+  useEffect(() => {
+    const monitor = new KneutController({
+      initial: savedKneut(props.meetingId),
+      getInput: () => {
+        const current = latest.current;
+        const voice = snapshotRef.current;
+        const turns = current.transcripts.filter(t => t.provisional && t.liveFinal);
+        return {
+          text: turns.map(t => t.text).join("\n").slice(-28000),
+          turns: turns.map(t => ({ id: t.sequence, text: t.text })),
+          incomplete: !!current.getSpeechActivity?.().transcriptPending || current.transcripts.some(t => t.provisional && !t.liveFinal),
+          recording: !!current.recording, live: !!current.liveAvailable,
+          ...(current.getSpeechActivity?.() ?? { lastSpeechAt: Date.now(), lastFrameAt: 0 }),
+          voiceBusy: ["thinking", "speaking"].includes(voice.status),
+          manualDialogue: !voice.controlled && !["idle", "error"].includes(voice.status),
+        };
+      },
+      assess: text => assessClarity(props.meetingId, text),
+      speak: (text, allowed) => session.current?.speakControlled(text, allowed) ?? Promise.resolve(false),
+      interrupt: () => session.current?.interrupt(),
+      onChange: state => {
+        setKneut(state);
+        try { localStorage.setItem(`kneut-${props.meetingId}`, JSON.stringify({ ...state, listening: false, error: undefined })); } catch { /* Audio saving remains independent. */ }
+      },
+    });
+    controller.current = monitor;
+    const timer = setInterval(() => monitor.tick(), 250);
+    return () => { clearInterval(timer); monitor.dispose(); controller.current = null; };
   }, [props.meetingId]);
 
   useEffect(() => { if(props.stopSignal)session.current?.disconnect(); }, [props.stopSignal]);
@@ -117,22 +167,32 @@ export function VoicePanel(props: Props) {
       <div className="notulist-character" role="img" aria-label={`AI-notulist: ${labels[snapshot.status]}`}>
         <div className="character-halo" /><div className="character-face"><i className="character-eye" /><i className="character-eye" /><span className="character-mouth" /></div>
       </div>
-      <div className="voice-title"><span className="label">Jouw AI-notulist</span><h2 id="voice-heading">Overleg met je notulist</h2>
-        <p className="voice-status" role="status">{snapshot.micMuted && snapshot.status === "listening" ? "Microfoon uit · je kunt ook typen" : labels[snapshot.status]}</p>
-        <p className="voice-explainer">{active
-          ? "Je praat nu met de notulist. Onderbreek gerust. Stop het gesprek als de vergadering verdergaat."
-          : "Ik gebruik de beschikbare vergadertekst als context. Start een gesprek om me iets te vragen."}</p>
+      <div className="voice-title"><span className="label">Jouw AI-notulist</span><h2 id="voice-heading">Kneut, je notulist</h2>
+        <p className="voice-status" role="status">{kneut.listening ? "Kneut luistert naar je vraag…" : snapshot.controlled && snapshot.status === "listening" ? "Kneut luistert stil mee via de vergadertekst" : snapshot.micMuted && snapshot.status === "listening" ? "Microfoon uit · je kunt ook typen" : labels[snapshot.status]}</p>
+        <p className="voice-explainer">{props.recording
+          ? "Zeg ‘Kneut’ en stel je vraag. Ik bewaar onduidelijkheden en vraag alleen bij een duidelijke overgang om uitleg."
+          : "Start een gesprek om me iets te vragen. Open vragen blijven hieronder zichtbaar."}</p>
       </div>
     </div>
     <div className="voice-controls">
-      {!active ? <button className="record-button" onClick={() => void session.current?.start()}>Praat met de notulist</button>
+      {!active || snapshot.controlled ? <button className="record-button" onClick={() => void session.current?.start()}>Praat met de notulist</button>
         : <button className="secondary-button" onClick={() => session.current?.disconnect()}>{connected ? "Terug naar meeluisteren" : "Annuleren"}</button>}
-      {connected && <>
+      {connected && !snapshot.controlled && <>
         <button className="voice-outline-button" aria-pressed={snapshot.micMuted} onClick={() => session.current?.setMicMuted(!snapshot.micMuted)}>{snapshot.micMuted ? "Microfoon aan" : "Microfoon uit"}</button>
         {(snapshot.status === "speaking" || snapshot.status === "thinking") && <button className="voice-outline-button" onClick={() => session.current?.interrupt()}>Onderbreek antwoord</button>}
       </>}
     </div>
-    <p className="voice-footnote">Opname, transcriptie en dit overleg horen bij dezelfde vergadering. Gebruik oortjes om de AI-stem uit je opname te houden. Live transcriptie en overleg gebruiken je OpenAI-budget. Alleen het overleg stopt na vijf minuten; transcriptie loopt mee met de opname.</p>
+    <div className="kneut-questions">
+      <div className="voice-controls">
+        <button className="voice-outline-button" aria-pressed={kneut.deferred} onClick={() => controller.current?.defer(!kneut.deferred)}>{kneut.deferred ? "Vragen bij overgangen weer toestaan" : "Bewaar vragen tot het einde"}</button>
+        {snapshot.controlled && <button className="voice-outline-button" onClick={() => session.current?.disconnect()}>Gesprek stoppen</button>}
+      </div>
+      {props.recording && !props.liveAvailable && <p role="status">Aanspreken met ‘Kneut’ wacht op de live transcriptie.</p>}
+      {kneut.deferred && <p role="status">Kneut bewaart zijn vragen tot het einde. Je kunt hem blijven aanspreken.</p>}
+      {kneut.questions.length > 0 && <>{!props.recording && <button className="voice-outline-button" onClick={() => void session.current?.speakControlled(`Lees deze open vragen kort voor: ${JSON.stringify(kneut.questions)}`, () => !latest.current.recording)}>Bespreek open vragen na afloop</button>}<h3>Open vragen{props.recording ? "" : " bij afronden"}</h3><ul>{kneut.questions.map(q => <li key={q.id}>{q.question}</li>)}</ul></>}
+      {kneut.error && <p role="status">{kneut.error}</p>}
+    </div>
+    <p className="voice-footnote">Opname, transcriptie en dit overleg horen bij dezelfde vergadering. Gebruik oortjes om de AI-stem uit je opname te houden. Live transcriptie, beoordeling van open vragen en overleg gebruiken je OpenAI-budget. Alleen het overleg stopt na vijf minuten; transcriptie loopt mee met de opname.</p>
     {snapshot.error && <p className="voice-error" role="alert">{snapshot.error}</p>}
     {snapshot.playbackBlocked && <button className="voice-outline-button" onClick={() => void session.current?.playAudio()}>Gesproken antwoord afspelen</button>}
     <audio ref={audio} autoPlay controls={connected} className="voice-audio" aria-label="Stem van de AI-notulist" />

@@ -19,6 +19,7 @@ export class LiveTranscription {
   private pendingCommits = 0;
   private expected = new Set<string>();
   constructor(private readonly meetingId: string, private readonly onResult: (result: TranscriptResult) => void, private readonly onState: (state: LiveState) => void) {}
+  get unsettled() { return this.talking || this.pendingCommits > 0 || this.expected.size > 0; }
   async start() {
     if (this.socket || this.ready) return;
     const epoch = ++this.epoch; this.onState("connecting"); this.pending = [];
@@ -82,7 +83,7 @@ export class LiveTranscription {
       const final=event.type.endsWith("completed");
       const text=final?String(event.transcript??""):(this.texts.get(id)??"")+String(event.delta??"");this.texts.set(id,text);
       if(final)this.expected.delete(id);
-      this.onResult({meetingId:this.meetingId,sequence:this.order.get(id)!,text,model:"gpt-live-transcribe",provisional:true});
+      this.onResult({meetingId:this.meetingId,sequence:this.order.get(id)!,text,model:"gpt-live-transcribe",provisional:true,liveFinal:final});
       // Finished paragraphs remain in React state, not in an unbounded audio buffer.
       if(final)this.texts.delete(id);
     }
