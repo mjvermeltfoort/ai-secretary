@@ -20,6 +20,7 @@ export async function readWav(blob: Blob): Promise<Int16Array> {
     || view.getUint16(34, true) !== 16 || view.getUint32(36) !== 0x64617461 || view.getUint32(40, true) !== bytes.byteLength - 44) {
     throw new Error("Deze opname gebruikt een ouder of ongeldig audioformaat. De originele lokale bestanden blijven behouden.");
   }
+  if (new Uint8Array(new Uint16Array([1]).buffer)[0] === 1) return new Int16Array(bytes, 44);
   return Int16Array.from({ length: (bytes.byteLength - 44) / 2 }, (_, i) => view.getInt16(44 + i * 2, true));
 }
 /** Storage boundaries are exact sample boundaries, never recorder restarts. */

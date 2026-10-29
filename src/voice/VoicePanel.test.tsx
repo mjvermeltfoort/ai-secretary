@@ -93,3 +93,11 @@ describe("Kneut meeting integration", () => {
     expect(rig.disconnect).toHaveBeenCalled();
   });
 });
+
+it("never treats restored or replayed text as a new wake word",async()=>{
+ vi.useFakeTimers();vi.setSystemTime(new Date("2026-10-29T13:00:00Z"));
+ const props={meetingId:"m1",onNotesUpdated,recording:true,liveAvailable:true,getSpeechActivity:()=>({lastSpeechAt:Date.now()-10000,lastFrameAt:Date.now()})};
+ const view=render(<VoicePanel {...props} transcripts={[]} />);
+ view.rerender(<VoicePanel {...props} transcripts={[{meetingId:"m1",sequence:1,text:"Kneut, wat is besloten?",model:"test",provisional:true,liveFinal:true,replayed:true}]} />);
+ await act(async()=>{await vi.advanceTimersByTimeAsync(1000);});expect(rig.speakControlled).not.toHaveBeenCalled();expect(rig.assess).not.toHaveBeenCalled();
+});

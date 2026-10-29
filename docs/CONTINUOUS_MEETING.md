@@ -30,10 +30,11 @@ de verwerkte tekst en notulen worden geraadpleegd.
   stilte; langdurige ononderbroken spraak krijgt een technische bovengrens van
   60 seconden per turn. De verbinding zelf wordt daarbij niet herstart. Tekst is
   live en voorlopig. Completion-events worden op input-item-ID geordend.
-- Bij een netwerkprobleem of teveel gebufferde netwerkdata sluit alleen de live
-  verbinding. De lokale opname blijft doorlopen. Bij terugkeer van internet kan
-  live tekst opnieuw starten. Gemiste audio wordt meegenomen bij de controle na
-  afloop; de live verbinding doet geen belofte over volledige offline replay.
+- Bij netwerkproblemen wordt de live verbinding automatisch hersteld, met replay
+  vanuit opgeslagen WAV-blokken en een transactioneel bewaarde tekst-/samplecursor.
+  Opname blijft onafhankelijk doorlopen. De live route verstuurt uitsluitend reeds
+  opgeslagen audio; aanvoer heeft daardoor circa twee seconden extra vertraging.
+  Tijdens inhalen blijft Kneut stil. Zie RECORDING_RECOVERY.md voor de grenzen.
 - De controle gebruikt vensters van maximaal 60 seconden, met vier seconden
   overlap. WAV-samples worden exact samengevoegd over opslaggrenzen heen. Er
   hoeft dus geen zin in een lokaal opslagblok te passen. Eerder opgenomen
@@ -52,7 +53,8 @@ de verwerkte tekst en notulen worden geraadpleegd.
 ## Bewaren en herstellen
 
 De actieve sessie wordt lokaal onthouden en lokaal aanwezige vergaderingen zijn
-via de keuzelijst terug te openen. De audio kan dan opnieuw worden verwerkt.
+via de keuzelijst terug te openen, met bewaarde tekst en laatst gegenereerde notulen.
+De opname kan worden hervat, geëxporteerd en opnieuw verwerkt.
 Audio wordt niet automatisch verwijderd. Sluiten/crashen kan het nog niet
 vastgelegde laatste blok verliezen. De gebruiker moet tijdens gebruik voldoende
 lokale opslag houden (ongeveer 170 MB per opname-uur). Browseropslag is geen

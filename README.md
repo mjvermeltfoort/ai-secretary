@@ -62,3 +62,10 @@ opname, controle na afloop en lokaal herstel. Sprekerherkenning is niet toegevoe
 Zeg **Kneut** aan het begin van je vraag tijdens een lopende vergadering.
 Kneut bewaart open vragen en stelt ze alleen bij een duidelijke overgang met
 stilte. Zie [KNEUT.md](docs/KNEUT.md) voor bediening, uitstellen en grenzen.
+
+## Opname- en verbindingsherstel
+
+De app bewaart live tekst en voortgang lokaal, herstelt verbindingen automatisch
+en kan na herladen dezelfde vergadering hervatten. Zie
+[RECORDING_RECOVERY.md](docs/RECORDING_RECOVERY.md) voor opslag, wake lock, export,
+herstelgedrag en de resterende stappen voor lange notulen.
