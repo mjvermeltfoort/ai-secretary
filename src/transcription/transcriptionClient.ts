@@ -9,6 +9,9 @@ export interface TranscriptResult {
   model: string;
   provisional?: boolean;
   liveFinal?: boolean;
+  replayed?: boolean;
+  audioStartSample?: number;
+  audioEndSample?: number;
   overlapUncertain?: boolean;
 }
 

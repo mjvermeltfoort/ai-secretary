@@ -102,8 +102,8 @@ export function VoicePanel(props: Props) {
         const turns = current.transcripts.filter(t => t.provisional && t.liveFinal);
         return {
           text: turns.map(t => t.text).join("\n").slice(-28000),
-          turns: turns.map(t => ({ id: t.sequence, text: t.text })),
-          incomplete: !!current.getSpeechActivity?.().transcriptPending || current.transcripts.some(t => t.provisional && !t.liveFinal),
+          turns: turns.filter(t=>!t.replayed).map(t => ({ id: t.sequence, text: t.text })),
+          incomplete: !!turns.at(-1)?.replayed || !!current.getSpeechActivity?.().transcriptPending || current.transcripts.some(t => t.provisional && !t.liveFinal),
           recording: !!current.recording, live: !!current.liveAvailable,
           ...(current.getSpeechActivity?.() ?? { lastSpeechAt: Date.now(), lastFrameAt: 0 }),
           voiceBusy: ["thinking", "speaking"].includes(voice.status),

@@ -1,5 +1,6 @@
 import { registerLocalSegment, type RecordingState } from "../domain/recording";
 import { IndexedDbSegmentStore, type LocalSegment, type SegmentStore } from "./localSegmentStore";
+import { sha256 } from "./exportRecording";
 import { pcm16, PcmSegmenter, SAMPLE_RATE, wav } from "./pcm";
 export interface BrowserRecorderOptions {
   segmentDurationMs?: number; store?: SegmentStore;
@@ -30,7 +31,7 @@ export class BrowserRecorder {
     if (this.state.status === "recording" || this.starting) return;
     await this.stopping;
     if (this.context && this.state.status === "paused" && meetingId === this.meetingId) {
-      this.node?.port.postMessage({ type: "resume" }); this.state = { ...this.state, status: "recording" }; return;
+      await this.context.resume(); this.node?.port.postMessage({ type: "resume" }); this.state = { ...this.state, status: "recording" }; return;
     }
     const generation = ++this.generation; this.starting = true;
     try {
@@ -43,7 +44,18 @@ export class BrowserRecorder {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
       if (generation !== this.generation) { stream.getTracks().forEach(t => t.stop()); return; }
       this.stream = stream;
+      stream.getAudioTracks().forEach(track => track.addEventListener("ended", () => {
+        if (this.stream !== stream) return;
+        void this.stop().catch(()=>undefined).finally(() => this.options.onError?.(new Error("De microfoon is gestopt. De eerder opgeslagen audio blijft beschikbaar; hervat de vergadering om verder op te nemen.")));
+      }));
       this.context = new AudioContext({ sampleRate: SAMPLE_RATE });
+      const context = this.context;
+      context.addEventListener("statechange", () => {
+        if (this.context !== context || this.state.status !== "recording" || this.stopping) return;
+        if (context.state === "suspended" || context.state === "closed") {
+          void this.stop().catch(()=>undefined).finally(()=>this.options.onError?.(new Error("De browser heeft de opname onderbroken. Hervat de vergadering; de al bewaarde audio blijft beschikbaar.")));
+        }
+      });
       if (this.context.sampleRate !== SAMPLE_RATE) throw new Error("Deze browser ondersteunt de vereiste opnamesnelheid niet.");
       await this.context.audioWorklet.addModule("/pcm-recorder-worklet.js");
       if (generation !== this.generation) return;
@@ -75,7 +87,10 @@ export class BrowserRecorder {
     this.stopping = (async () => {
       if (this.starting) { await this.release(); this.state={...this.state,status:"stopped"}; return; }
       try {
-        await this.flush("pause"); this.segmenter?.flush(); await this.saving;
+        let flushError: unknown;
+        try { await this.flush("pause"); } catch(cause) { flushError=cause; }
+        this.segmenter?.flush(); await this.saving;
+        if(flushError)throw flushError;
       } finally { await this.release(); this.state = { ...this.state, status: "stopped" }; }
     })().finally(() => { this.stopping = undefined; });
     return this.stopping;
@@ -95,7 +110,8 @@ export class BrowserRecorder {
     const segment: LocalSegment = { id: `${this.meetingId}-${sequence}`, meetingId: this.meetingId, sequence, createdAt: Date.now(), durationMs, startMs: this.offsetMs, blob: wav(samples), transcriptionStatus: "pending" };
     this.offsetMs += durationMs; this.state = { ...this.state, nextSequence: sequence + 1 };
     this.saving = this.saving.then(async () => {
-      await this.store.put(segment);
+      segment.checksum = await sha256(segment.blob);
+      if(this.store.append)await this.store.append(segment);else await this.store.put(segment);
       this.state = registerLocalSegment(this.state, sequence); this.options.onSegment?.(segment);
     });
     void this.saving.catch((cause) => {
