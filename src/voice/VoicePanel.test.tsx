@@ -32,7 +32,7 @@ describe("voice panel", () => {
   it("never starts a paid connection automatically and closes on unmount", async () => {
     const view = render(panel());
     expect(rig.startDialogue).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Praat met de notulist" }));
+    fireEvent.click(screen.getByRole("button", { name: "Praat met Kneut" }));
     await waitFor(()=>expect(rig.startDialogue).toHaveBeenCalledOnce());
     view.unmount();
     expect(rig.disconnect).toHaveBeenCalledOnce();
@@ -87,10 +87,10 @@ describe("Kneut meeting integration", () => {
     view.rerender(<VoicePanel {...props} transcripts={[{meetingId:"m1",sequence:1,text:"We bestellen kleding. Welke kleur?",model:"test",provisional:true,liveFinal:true},{meetingId:"m1",sequence:2,text:"Kneut, wat is besloten?",model:"test",provisional:true,liveFinal:true}]} />);
     await act(async()=>{await vi.advanceTimersByTimeAsync(300);});
     expect(rig.startDialogue).toHaveBeenCalledWith("wat is besloten?","Kneut, wat is besloten?");
-    fireEvent.click(screen.getByRole("button",{name:"Bewaar vragen tot het einde"}));
+    fireEvent.change(screen.getByRole("combobox",{name:"Vragen stellen"}),{target:{value:"end"}});
     expect(JSON.parse(localStorage.getItem("kneut-m1")!).deferred).toBe(true);
     view.rerender(<VoicePanel {...props} recording={false} stopSignal={1} transcripts={[]} />);
-    expect(screen.getByRole("button",{name:"Bespreek open vragen na afloop"})).toBeTruthy();
+    expect(screen.getByRole("button",{name:"Bespreek open vragen"})).toBeTruthy();
     expect(rig.disconnect).toHaveBeenCalled();
   });
 });
@@ -105,7 +105,7 @@ it("never treats restored or replayed text as a new wake word",async()=>{
 
 it("scopes the red error style to the alert and exposes concise diagnostic details",()=>{
  render(panel());act(()=>rig.options.onSnapshot({status:"error",micMuted:false,playbackBlocked:false,error:"Verzoek niet verwerkt",diagnostic:{code:"invalid_value",parameter:"item.id",event:"conversation.item.create"}}));
- expect(screen.getByRole("region",{name:"Kneut, je notulist"}).classList.contains("voice-error")).toBe(false);
+ expect(screen.getByRole("region",{name:"Kneut"}).classList.contains("voice-error")).toBe(false);
  expect(screen.getByRole("alert").classList.contains("voice-error")).toBe(true);
  expect(screen.getByText("Technische foutgegevens")).toBeTruthy();expect(screen.getByText(/Code: invalid_value/)).toBeTruthy();
 });
@@ -127,8 +127,8 @@ it("switches to dialogue on wake and restores listening when the conversation cl
 it("shows a general summary and reuses it when the conversation starts",async()=>{
  const transcript={meetingId:"m1",sequence:1,text:"Nieuwe kleding besproken. Mark vraagt offertes op.",model:"test"};
  render(<VoicePanel meetingId="m1" transcripts={[transcript]} onNotesUpdated={onNotesUpdated}/>);
- fireEvent.click(screen.getByRole("button",{name:"Maak algemene samenvatting"}));await screen.findByText("Samenvatting",{exact:true});
- expect(rig.prepare).toHaveBeenCalledOnce();fireEvent.click(screen.getByRole("button",{name:"Praat met de notulist"}));
+ fireEvent.click(screen.getByRole("button",{name:"Maak samenvatting"}));await screen.findByText("Samenvatting",{exact:true});
+ expect(rig.prepare).toHaveBeenCalledOnce();fireEvent.click(screen.getByRole("button",{name:"Praat met Kneut"}));
  await waitFor(()=>expect(rig.startDialogue).toHaveBeenCalledOnce());expect(rig.prepare).toHaveBeenCalledOnce();
  expect(JSON.parse(rig.options.getContext()).briefing.summary).toBe("Samenvatting");
 });
@@ -136,9 +136,25 @@ it("waits for a shared summary and never starts speech after preparation is canc
  let resolve!:(value:any)=>void;rig.prepare.mockImplementationOnce(()=>new Promise(done=>{resolve=done;}));
  const transcript={meetingId:"m1",sequence:1,text:"Kleding besproken.",model:"test"};
  render(<VoicePanel meetingId="m1" transcripts={[transcript]} onNotesUpdated={onNotesUpdated}/>);
- fireEvent.click(screen.getByRole("button",{name:"Praat met de notulist"}));
- expect(screen.getByText("Kneut leest de vergadering bij…")).toBeTruthy();
+ fireEvent.click(screen.getByRole("button",{name:"Praat met Kneut"}));
+ expect(screen.getByText("Leest de vergadering bij…")).toBeTruthy();
  fireEvent.click(screen.getByRole("button",{name:"Voorbereiden annuleren"}));
  await act(async()=>{resolve({summary:"Kleding besproken.",sourceText:transcript.text,provisional:false});await Promise.resolve();});
  expect(rig.startDialogue).not.toHaveBeenCalled();
+});
+
+it("switches tab panels with the keyboard without interrupting the voice session",async()=>{
+ render(<VoicePanel meetingId="m1" transcripts={[]} onNotesUpdated={onNotesUpdated} liveContent={<p>Vergadertekst</p>} notesContent={<p>Uitgewerkte afspraken</p>}/>);
+ fireEvent.click(screen.getByRole("button",{name:"Praat met Kneut"}));await waitFor(()=>expect(rig.startDialogue).toHaveBeenCalledOnce());
+ act(()=>rig.options.onSnapshot({status:"listening",controlled:false,micMuted:false,playbackBlocked:false}));
+ const summary=screen.getByRole("tab",{name:"Samenvatting"});summary.focus();fireEvent.keyDown(summary,{key:"ArrowRight"});
+ expect(screen.getByRole("tabpanel",{name:"Live tekst"}).textContent).toContain("Vergadertekst");expect(document.activeElement).toBe(screen.getByRole("tab",{name:"Live tekst"}));
+ fireEvent.keyDown(document.activeElement!,{key:"End"});expect(screen.getByRole("tabpanel",{name:"Notulen"}).textContent).toContain("Uitgewerkte afspraken");
+ expect(rig.disconnect).not.toHaveBeenCalled();expect(rig.startDialogue).toHaveBeenCalledOnce();
+});
+it("collapses finished dialogue and makes it available without reconnecting",()=>{
+ render(panel());act(()=>rig.options.onMessage({id:"a",role:"assistant",text:"Eerder antwoord",final:true}));
+ expect(screen.queryByRole("log")).toBeNull();fireEvent.click(screen.getByRole("button",{name:"Bekijk laatste gesprek"}));
+ expect(screen.getByRole("log").textContent).toContain("Eerder antwoord");expect(rig.startDialogue).not.toHaveBeenCalled();
+ fireEvent.click(screen.getByRole("button",{name:"Verberg gesprek"}));expect(screen.queryByRole("log")).toBeNull();
 });

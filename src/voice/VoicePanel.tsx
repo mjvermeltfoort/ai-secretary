@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode, type KeyboardEvent } from "react";
 import type { MeetingNotes, ActionItemProposal } from "../notes/notesClient";
 import { saveActionItemProposal } from "../notes/notesClient";
 import type { TranscriptResult } from "../transcription/transcriptionClient";
@@ -10,6 +10,8 @@ import { briefingSource, meetingVoiceContext, type VoiceBriefing } from "./voice
 import { VoiceSession, type VoiceMessage, type VoiceSnapshot } from "./voiceSession";
 
 interface Props {
+  liveContent?: ReactNode;
+  notesContent?: ReactNode;
   meetingId: string;
   transcripts: TranscriptResult[];
   notes?: MeetingNotes;
@@ -37,9 +39,18 @@ function savedKneut(meetingId: string): KneutState {
   return { questions: [], deferred: false, listening: false };
 }
 const initial: VoiceSnapshot = { status: "idle", micMuted: false, playbackBlocked: false };
-const labels = { idle: "Luistert stil mee via het transcript", connecting: "Verbinding maken…", listening: "Luistert naar je vraag", thinking: "Denkt na…", speaking: "Spreekt", error: "Gesprek niet verbonden" };
+const labels = { idle: "Luistert mee", connecting: "Verbinden…", listening: "Luistert naar je vraag", thinking: "Denkt na…", speaking: "Spreekt", error: "Niet verbonden" };
 
 export function VoicePanel(props: Props) {
+  const [tab, setTab] = useState("summary");
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const tabs = [{id:"summary",label:"Samenvatting"},{id:"live",label:"Live tekst"},{id:"notes",label:"Notulen"}];
+  const tabPrefix = `meeting-${props.meetingId}`;
+  function changeTab(event: KeyboardEvent<HTMLButtonElement>, index: number) {
+    const next = event.key === "Home" ? 0 : event.key === "End" ? 2 : event.key === "ArrowRight" ? (index+1)%3 : event.key === "ArrowLeft" ? (index+2)%3 : undefined;
+    if (next === undefined) return;
+    event.preventDefault(); setTab(tabs[next].id); document.getElementById(`${tabPrefix}-tab-${tabs[next].id}`)?.focus();
+  }
   const audio = useRef<HTMLAudioElement>(null);
   const session = useRef<VoiceSession | null>(null);
   const latest = useRef(props);
@@ -253,16 +264,13 @@ export function VoicePanel(props: Props) {
       <div className="notulist-character" role="img" aria-label={`AI-notulist: ${labels[snapshot.status]}`}>
         <div className="character-halo" /><div className="character-face"><i className="character-eye" /><i className="character-eye" /><span className="character-mouth" /></div>
       </div>
-      <div className="voice-title"><span className="label">Jouw AI-notulist</span><h2 id="voice-heading">Kneut, je notulist</h2>
-        <p className="voice-status" role="status">{preparing ? "Kneut leest de vergadering bij…" : kneut.listening ? "Kneut luistert naar je vraag…" : snapshot.controlled && snapshot.status === "listening" ? "Kneut luistert stil mee via de vergadertekst" : snapshot.micMuted && snapshot.status === "listening" ? "Microfoon uit · je kunt ook typen" : labels[snapshot.status]}</p>
-        <p className="voice-explainer">{preparing ? "Ik lees de beschikbare vergadertekst zodat ik je vragen kan beantwoorden." : active && !snapshot.controlled
-          ? "Je praat nu met Kneut. Kies Terug naar meeluisteren om de live transcriptie te hervatten."
-          : props.recording ? "Zeg ‘Kneut’ en stel je vraag. Ik bewaar onduidelijkheden en vraag alleen bij een duidelijke overgang om uitleg."
-          : "Start een gesprek om me iets te vragen. Open vragen blijven hieronder zichtbaar."}</p>
+      <div className="voice-title"><h2 id="voice-heading">Kneut</h2>
+        <p className="voice-status" role="status">{preparing ? "Leest de vergadering bij…" : kneut.listening ? "Luistert naar je vraag…" : snapshot.controlled && snapshot.status === "listening" ? "Luistert mee" : snapshot.micMuted && snapshot.status === "listening" ? "Microfoon uit · je kunt ook typen" : snapshot.status === "idle" && !props.recording ? "Klaar voor je vraag" : labels[snapshot.status]}</p>
+        {!active && !preparing && props.recording && <p className="voice-explainer">Zeg ‘Kneut’ om een vraag te stellen.</p>}
       </div>
     </div>
     <div className="voice-controls">
-      {preparing ? <button className="secondary-button" onClick={cancelPreparation}>Voorbereiden annuleren</button> : !active || snapshot.controlled ? <button className="record-button" onClick={() => void beginDialogue()}>Praat met de notulist</button>
+      {preparing ? <button className="secondary-button" onClick={cancelPreparation}>Voorbereiden annuleren</button> : !active || snapshot.controlled ? <button className="record-button" onClick={() => void beginDialogue()}>Praat met Kneut</button>
         : <button className="secondary-button" onClick={() => session.current?.disconnect()}>{connected ? "Terug naar meeluisteren" : "Annuleren"}</button>}
       {connected && !snapshot.controlled && <>
         <button className="voice-outline-button" aria-pressed={snapshot.micMuted} onClick={() => session.current?.setMicMuted(!snapshot.micMuted)}>{snapshot.micMuted ? "Microfoon aan" : "Microfoon uit"}</button>
@@ -271,31 +279,16 @@ export function VoicePanel(props: Props) {
     </div>
     {summaryWorking && briefingProgress.total>0 && <p role="status">Samenvatting voorbereiden: {briefingProgress.done} van {briefingProgress.total} tekstdelen.</p>}
     {briefingError && <p className="voice-error" role="alert">{briefingError}</p>}
-    <section className="meeting-summary" aria-label="Algemene samenvatting">
-      <h3>Wat is er besproken?</h3>
-      <button className="voice-outline-button" disabled={summaryWorking || !briefingSource(props.meetingId,props.transcripts)} onClick={()=>void updateGeneralSummary()}>{summaryWorking?"Samenvatting voorbereiden…":generalSummary?"Samenvatting bijwerken":"Maak algemene samenvatting"}</button>
-      {generalSummary ? <>
-        {generalSummary.sourceText!==briefingSource(props.meetingId,props.transcripts) && <p className="muted">Er is nieuwere vergadertekst beschikbaar. Werk de samenvatting bij voor de laatste stand.</p>}
-        <p className="summary-text">{generalSummary.summary}</p>
-        {generalSummary.provisional && <p className="muted">Gebaseerd op de beschikbare live tekst; controle na afloop kan dit nog wijzigen.</p>}
-      </> : <p className="muted">De belangrijkste onderwerpen, standpunten, besluiten en actiepunten komen hier samen. Deze samenvatting gaat ook mee in het gesprek met Kneut.</p>}
-    </section>
-    <div className="kneut-questions">
-      <div className="voice-controls">
-        <button className="voice-outline-button" aria-pressed={kneut.deferred} onClick={() => controller.current?.defer(!kneut.deferred)}>{kneut.deferred ? "Vragen bij overgangen weer toestaan" : "Bewaar vragen tot het einde"}</button>
-        {snapshot.controlled && <button className="voice-outline-button" onClick={() => session.current?.disconnect()}>Gesprek stoppen</button>}
-      </div>
-      {props.recording && !props.liveAvailable && <p role="status">Aanspreken met ‘Kneut’ wacht op de live transcriptie.</p>}
-      {kneut.deferred && <p role="status">Kneut bewaart zijn vragen tot het einde. Je kunt hem blijven aanspreken.</p>}
-      {kneut.questions.length > 0 && <>{!props.recording && <button className="voice-outline-button" onClick={() => void beginDialogue(`Lees deze open vragen kort voor: ${JSON.stringify(kneut.questions)}`, "Welke vragen staan er nog open?")}>Bespreek open vragen na afloop</button>}<h3>Open vragen{props.recording ? "" : " bij afronden"}</h3><ul>{kneut.questions.map(q => <li key={q.id}>{q.question}</li>)}</ul></>}
-      {kneut.error && <p role="status">{kneut.error}</p>}
-    </div>
-    <p className="voice-footnote">Opname, transcriptie en dit overleg horen bij dezelfde vergadering. Gebruik oortjes om de AI-stem uit je opname te houden. Live transcriptie, beoordeling van open vragen en overleg gebruiken je OpenAI-budget. Alleen het overleg stopt na vijf minuten; transcriptie loopt mee met de opname.</p>
+    <div className="kneut-settings"><label htmlFor="kneut-timing">Vragen stellen</label><select id="kneut-timing" value={kneut.deferred?"end":"transitions"} onChange={event=>controller.current?.defer(event.target.value==="end")}><option value="transitions">Bij overgangen</option><option value="end">Na afloop</option></select></div>
+    {props.recording && !props.liveAvailable && !active && !preparing && <p className="muted" role="status">Spraakactivering wacht op live tekst.</p>}
+    {kneut.error && <p role="status">{kneut.error}</p>}
+
     {snapshot.error && <div className="voice-error" role="alert"><p>{snapshot.error}</p>{snapshot.diagnostic && <details><summary>Technische foutgegevens</summary><p>Code: {snapshot.diagnostic.code}{snapshot.diagnostic.parameter && <> · Veld: {snapshot.diagnostic.parameter}</>}{snapshot.diagnostic.event && <> · Verzoek: {snapshot.diagnostic.event}</>}</p></details>}</div>}
     {snapshot.playbackBlocked && <button className="voice-outline-button" onClick={() => void session.current?.playAudio()}>Gesproken antwoord afspelen</button>}
     <audio ref={audio} autoPlay controls={connected} className="voice-audio" aria-label="Stem van de AI-notulist" />
-    {(connected || messages.length > 0) && <div className="voice-conversation">
-      <div className="voice-chat-heading"><h3>Overleg binnen deze vergadering</h3><span>AI-antwoorden zijn geen vergaderbesluiten</span></div>
+    {!active && messages.length>0 && <button className="history-toggle" aria-expanded={historyOpen} aria-controls={`${tabPrefix}-history`} onClick={()=>setHistoryOpen(!historyOpen)}>{historyOpen ? "Verberg gesprek" : "Bekijk laatste gesprek"}</button>}
+    {(connected || messages.length > 0) && <div id={`${tabPrefix}-history`} className="voice-conversation" hidden={!active && !historyOpen}>
+      <div className="voice-chat-heading"><h3>Overleg met Kneut</h3></div>
       <div ref={chatLog} className="voice-chat-log" role="log" aria-live="polite" aria-relevant="additions text">
         {messages.length === 0 && <p className="muted">Stel je vraag hardop of typ hem hieronder.</p>}
         {messages.map((message) => <div className={`voice-message voice-message-${message.role}`} key={message.id}>
@@ -317,5 +310,21 @@ export function VoicePanel(props: Props) {
       <div className="voice-controls"><button className="secondary-light-button" disabled={saving || stale} onClick={() => void confirmProposal()}>{saving ? "Opslaan…" : "Wijziging opslaan"}</button><button className="voice-outline-button" disabled={saving} onClick={rejectProposal}>Afwijzen</button></div>
     </div>}
     {notice && <p className="voice-notice" role="status">{notice}</p>}
+
+    <div className="meeting-tabs" role="tablist" aria-label="Vergaderinhoud">{tabs.map((item,index)=><button key={item.id} id={`${tabPrefix}-tab-${item.id}`} type="button" role="tab" aria-selected={tab===item.id} aria-controls={`${tabPrefix}-panel-${item.id}`} tabIndex={tab===item.id?0:-1} onClick={()=>setTab(item.id)} onKeyDown={event=>changeTab(event,index)}>{item.label}</button>)}</div>
+    <div className="meeting-tabpanel" role="tabpanel" id={`${tabPrefix}-panel-summary`} aria-labelledby={`${tabPrefix}-tab-summary`} hidden={tab!=="summary"} tabIndex={0}>    <section className="meeting-summary" aria-label="Algemene samenvatting">
+      <h2>Wat is er besproken?</h2>
+      <button className="voice-outline-button" disabled={summaryWorking || !briefingSource(props.meetingId,props.transcripts)} onClick={()=>void updateGeneralSummary()}>{summaryWorking?"Samenvatting voorbereiden…":generalSummary?"Bijwerken":"Maak samenvatting"}</button>
+      {generalSummary ? <>
+        {generalSummary.sourceText!==briefingSource(props.meetingId,props.transcripts) && <p className="muted">Nieuwe tekst beschikbaar · werk de samenvatting bij.</p>}
+        <p className="summary-text">{generalSummary.summary}</p>
+        {generalSummary.provisional && <p className="muted">Voorlopig · gebaseerd op live tekst.</p>}
+      </> : <p className="muted">Maak een samenvatting van de besproken onderwerpen en afspraken.</p>}
+    </section>
+<div className="kneut-questions">
+      {kneut.questions.length > 0 && <><h3>Open vragen <span className="question-count">{kneut.questions.length}</span></h3><ul>{kneut.questions.map(q=><li key={q.id}>{q.question}</li>)}</ul>{!props.recording && <button className="voice-outline-button" onClick={()=>void beginDialogue(`Lees deze open vragen kort voor: ${JSON.stringify(kneut.questions)}`,"Welke vragen staan er nog open?")}>Bespreek open vragen</button>}</>}
+    </div></div>
+    <div className="meeting-tabpanel" role="tabpanel" id={`${tabPrefix}-panel-live`} aria-labelledby={`${tabPrefix}-tab-live`} hidden={tab!=="live"} tabIndex={0}>{props.liveContent ?? <p className="muted">Nog geen vergadertekst.</p>}</div>
+    <div className="meeting-tabpanel" role="tabpanel" id={`${tabPrefix}-panel-notes`} aria-labelledby={`${tabPrefix}-tab-notes`} hidden={tab!=="notes"} tabIndex={0}>{props.notesContent ?? <p className="muted">Nog geen notulen.</p>}</div>
   </section>;
 }

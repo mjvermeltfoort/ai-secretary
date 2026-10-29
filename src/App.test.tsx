@@ -15,19 +15,19 @@ vi.mock("./recording/browserRecorder",()=>({BrowserRecorder:class{
 vi.mock("./transcription/liveTranscription",()=>({LiveTranscription:class{constructor(_m:string,result:any,state:any){rig.liveOptions={result,state};rig.live=this;}start=vi.fn(async()=>rig.liveOptions.state("live"));close=vi.fn();finish=async()=>{};reconnect=vi.fn();noteSpeech=vi.fn();notifySavedAudio=vi.fn();}}));
 vi.mock("./transcription/review",()=>({reviewRecording:rig.review}));
 vi.mock("./notes/notesClient",()=>({createMeetingNotes:rig.notes}));
-vi.mock("./voice/VoicePanel",()=>({VoicePanel:(props:any)=>{rig.voiceProps=props;return <div data-testid="voice">Overleg met notulist</div>;}}));
+vi.mock("./voice/VoicePanel",()=>({VoicePanel:(props:any)=>{rig.voiceProps=props;return <div data-testid="voice">Overleg met notulist{props.liveContent}{props.notesContent}</div>;}}));
 import { App } from "./App";
 beforeEach(()=>{vi.clearAllMocks();localStorage.clear();rig.segments=[];rig.checkpoint=undefined;rig.reviewOrder=[];rig.review.mockImplementation(async(id:string)=>{rig.reviewOrder.push("review");return[{meetingId:id,sequence:1,text:"Gecontroleerde tekst",model:"test"}];});rig.notes.mockImplementation(async(id:string)=>{rig.reviewOrder.push("notes");return{meetingId:id,revision:"r",summary:"Notulen",decisions:[],actionItems:[],clarificationQuestions:[],model:"test"};});});
 afterEach(cleanup);
 it("shares one meeting and microphone with the notulist and reviews audio before notes",async()=>{
  render(<App/>);await waitFor(()=>expect((screen.getByRole("button",{name:"Start vergadering"}) as HTMLButtonElement).disabled).toBe(false));
  fireEvent.click(screen.getByRole("button",{name:"Start vergadering"}));
- await screen.findByRole("button",{name:"Rond vergadering af"});
+ await screen.findByRole("button",{name:"Afronden"});
  const meetingId=rig.voiceProps.meetingId;expect(rig.voiceProps.getMicrophone()).toBe(rig.mic);
  act(()=>rig.liveOptions.result({meetingId,sequence:1000000,text:"Live woorden",model:"test",provisional:true}));
  await waitFor(()=>expect(rig.voiceProps.transcripts[0].text).toBe("Live woorden"));
  expect(rig.recorder.recordingState.status).toBe("recording");
- fireEvent.click(screen.getByRole("button",{name:"Rond vergadering af"}));
+ fireEvent.click(screen.getByRole("button",{name:"Afronden"}));
  await screen.findByText("Gecontroleerde tekst");
  fireEvent.click(screen.getByRole("button",{name:"Maak definitieve notulen"}));
  await screen.findByRole("heading",{name:"Notulen"});expect(rig.reviewOrder).toEqual(["review","notes"]);
@@ -36,7 +36,7 @@ it("shares one meeting and microphone with the notulist and reviews audio before
 it("keeps local recordings accessible when the final online review fails",async()=>{
  rig.review.mockRejectedValueOnce(new Error("Geen internet"));render(<App/>);
  await waitFor(()=>expect((screen.getByRole("button",{name:"Start vergadering"}) as HTMLButtonElement).disabled).toBe(false));fireEvent.click(screen.getByRole("button",{name:"Start vergadering"}));
- fireEvent.click(await screen.findByRole("button",{name:"Rond vergadering af"}));
+ fireEvent.click(await screen.findByRole("button",{name:"Afronden"}));
  await screen.findByText("Geen internet");expect(rig.segments).toHaveLength(1);
  expect(rig.recorder.recordingState.status).toBe("stopped");
  expect(screen.getByRole("button",{name:"Transcript opnieuw controleren"})).toBeTruthy();
@@ -47,9 +47,9 @@ it("restores the latest text and notes and allows continuing the same recorded m
  rig.segments=[{meetingId:id,sequence:1,id:"s1",durationMs:2000,createdAt:1,blob:new Blob(["test"])}];
  rig.checkpoint={id,reviewedAudioCount:1,transcripts:[{meetingId:id,sequence:1,text:"Bewaarde volledige tekst",model:"test"}],notes:{meetingId:id,revision:"r1",summary:"Bewaarde notulen",decisions:[],actionItems:[],clarificationQuestions:[],model:"test"}};
  render(<App/>);await screen.findByText("Bewaarde volledige tekst");await screen.findByText("Bewaarde notulen");
- expect(screen.getByRole("button",{name:"Download opname"})).toBeTruthy();
+ fireEvent.click(screen.getByText("⋮"));expect(screen.getByRole("button",{name:"Download opname"})).toBeTruthy();
  fireEvent.click(screen.getByRole("button",{name:"Hervat vergadering"}));
- await screen.findByRole("button",{name:"Rond vergadering af"});expect(rig.voiceProps.meetingId).toBe(id);
+ await screen.findByRole("button",{name:"Afronden"});expect(rig.voiceProps.meetingId).toBe(id);
 });
 it("blocks recording until a low-storage warning is explicitly acknowledged",async()=>{
  Object.defineProperty(navigator,"storage",{configurable:true,value:{estimate:async()=>({quota:1_000_000,usage:0})}});
@@ -57,21 +57,21 @@ it("blocks recording until a low-storage warning is explicitly acknowledged",asy
   render(<App/>);await waitFor(()=>expect((screen.getByRole("button",{name:"Start vergadering"}) as HTMLButtonElement).disabled).toBe(false));
   fireEvent.click(screen.getByRole("button",{name:"Start vergadering"}));
   const override=await screen.findByRole("button",{name:"Toch starten met beperkte opslag"});expect(rig.recorder.recordingState.status).toBe("ready");
-  fireEvent.click(override);await screen.findByRole("button",{name:"Rond vergadering af"});
+  fireEvent.click(override);await screen.findByRole("button",{name:"Afronden"});
  } finally {Object.defineProperty(navigator,"storage",{configurable:true,value:undefined});}
 });
 
 it("still updates recording controls if final flushing reports an error",async()=>{
  render(<App/>);await waitFor(()=>expect((screen.getByRole("button",{name:"Start vergadering"}) as HTMLButtonElement).disabled).toBe(false));
- fireEvent.click(screen.getByRole("button",{name:"Start vergadering"}));await screen.findByRole("button",{name:"Rond vergadering af"});
+ fireEvent.click(screen.getByRole("button",{name:"Start vergadering"}));await screen.findByRole("button",{name:"Afronden"});
  rig.recorder.stop=async()=>{rig.recorder.recordingState.status="stopped";throw new Error("Laatste audio niet bevestigd");};
- fireEvent.click(screen.getByRole("button",{name:"Rond vergadering af"}));await screen.findByText("Laatste audio niet bevestigd");
- expect(screen.getByRole("button",{name:"Hervat vergadering"})).toBeTruthy();expect(screen.getByRole("button",{name:"Download opname"})).toBeTruthy();
+ fireEvent.click(screen.getByRole("button",{name:"Afronden"}));await screen.findByText("Laatste audio niet bevestigd");
+ expect(screen.getByRole("button",{name:"Hervat vergadering"})).toBeTruthy();fireEvent.click(screen.getByText("⋮"));expect(screen.getByRole("button",{name:"Download opname"})).toBeTruthy();
 });
 
 it("pauses live transcription during consultation and resumes only while recording",async()=>{
  render(<App/>);await waitFor(()=>expect((screen.getByRole("button",{name:"Start vergadering"}) as HTMLButtonElement).disabled).toBe(false));
- fireEvent.click(screen.getByRole("button",{name:"Start vergadering"}));await screen.findByRole("button",{name:"Rond vergadering af"});
+ fireEvent.click(screen.getByRole("button",{name:"Start vergadering"}));await screen.findByRole("button",{name:"Afronden"});
  const count=rig.live.start.mock.calls.length;
  act(()=>rig.voiceProps.onConsultationChange(true));
  expect(rig.live.close).toHaveBeenCalled();expect(rig.recorder.recordingState.status).toBe("recording");
@@ -79,7 +79,17 @@ it("pauses live transcription during consultation and resumes only while recordi
  act(()=>window.dispatchEvent(new Event("online")));expect(rig.live.reconnect).not.toHaveBeenCalled();
  act(()=>rig.voiceProps.onConsultationChange(false));expect(rig.live.start).toHaveBeenCalledTimes(count+1);
  act(()=>rig.voiceProps.onConsultationChange(true));
- fireEvent.click(screen.getByRole("button",{name:"Rond vergadering af"}));
+ fireEvent.click(screen.getByRole("button",{name:"Afronden"}));
  act(()=>rig.voiceProps.onConsultationChange(false));await screen.findByText("Gecontroleerde tekst");
  expect(rig.live.start).toHaveBeenCalledTimes(count+1);
+});
+
+it("keeps recording controls available while the options menu closes on Escape and outside click",async()=>{
+ render(<App/>);await waitFor(()=>expect((screen.getByRole("button",{name:"Start vergadering"}) as HTMLButtonElement).disabled).toBe(false));
+ const menu=screen.getByLabelText("Vergaderopties");fireEvent.click(menu);
+ expect(screen.getByRole("button",{name:"Nieuwe vergadering"})).toBeTruthy();fireEvent.keyDown(document,{key:"Escape"});
+ expect(menu.parentElement?.hasAttribute("open")).toBe(false);expect(document.activeElement).toBe(menu);
+ fireEvent.click(menu);fireEvent.pointerDown(screen.getByRole("button",{name:"Start vergadering"}));expect(menu.parentElement?.hasAttribute("open")).toBe(false);
+ fireEvent.click(screen.getByRole("button",{name:"Start vergadering"}));await screen.findByRole("button",{name:"Afronden"});
+ expect(screen.getByRole("button",{name:"Pauzeer"})).toBeTruthy();expect(rig.recorder.recordingState.status).toBe("recording");
 });

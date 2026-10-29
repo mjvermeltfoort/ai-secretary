@@ -14,10 +14,18 @@ voorstellen die expliciet bevestigd moeten worden.
 
 **Pauzeer** onderbreekt de opname en sluit de live transcriptie; overleg blijft
 beschikbaar. **Hervat vergadering** hervat dezelfde audiograaf en dezelfde sessie.
-**Rond vergadering af** sluit het overleg, bewaart het laatste audiostuk, stopt de
+**Afronden** sluit het overleg, bewaart het laatste audiostuk, stopt de
 microfoonopname en start de controle vanuit de lokale audio. Daarna kan de
 gebruiker **Maak definitieve notulen** kiezen. De notulist kan ook na afronden over
 de verwerkte tekst en notulen worden geraadpleegd.
+
+## Compacte interface
+
+De kop toont de opnamestatus en opgenomen tijd (op basis van bewaarde audio; bijgewerkt per audioblok, pauzes tellen niet mee). Starten/hervatten, pauzeren en afronden blijven direct bereikbaar. Het optiemenu **⋮** bevat nieuwe/eerdere vergaderingen, beschikbare downloads, Help en het account. Buiten het menu klikken of Escape sluit het menu.
+
+Onder Kneut staan de actuele gespreksknoppen en **Vragen stellen: Bij overgangen / Na afloop**. Een afgerond gesprek is ingeklapt onder **Bekijk laatste gesprek**. Samenvatting, Live tekst en Notulen hebben ieder een tabblad; wisselen start of stopt geen opname, transcriptie of spraakverbinding. Pijltoetsen, Home en End bedienen de tabbladen. Definitieve notulen kunnen op het tabblad Notulen worden aangemaakt zodra de opname is afgerond.
+
+Algemene uitleg staat onder Help; technische opnamegegevens onder Details. Opslagwaarschuwingen, opnamefouten en herstelproblemen blijven buiten de tabbladen zichtbaar. Transcriptievoortgang blijft tijdens verwerken zichtbaar. De opnamestatus wordt één keer in de kop getoond, live regels hebben geen herhaald Live-label.
 
 ## Audio en transcriptie
 

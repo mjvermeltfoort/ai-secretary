@@ -64,6 +64,14 @@ export function App() {
   const [briefingSnapshot, setBriefingSnapshot] = useState<VoiceBriefing>();
   const [notes, setNotes] = useState<MeetingNotes>();
   const [notesLoading, setNotesLoading] = useState(false);
+  const [audioDuration, setAudioDuration] = useState(0);
+  const meetingMenu = useRef<HTMLDetailsElement>(null);
+  useEffect(() => {
+    const close = (event: PointerEvent) => { if (!meetingMenu.current?.contains(event.target as Node)) meetingMenu.current?.removeAttribute("open"); };
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape" && meetingMenu.current?.open) { meetingMenu.current.removeAttribute("open"); meetingMenu.current.querySelector("summary")?.focus(); } };
+    document.addEventListener("pointerdown", close); document.addEventListener("keydown", escape);
+    return () => { document.removeEventListener("pointerdown", close); document.removeEventListener("keydown", escape); };
+  }, []);
   const meetingId = session.id;
   const sessionIdRef = useRef(meetingId);
   sessionIdRef.current = meetingId;
@@ -83,6 +91,7 @@ export function App() {
     live.current = transcriber;
     void Promise.all([store.current.list(meetingId),store.current.loadMeeting(meetingId)]).then(([segments,saved]) => {
       if (!allowed() || recorder.current?.recordingState.status === "recording" || recorder.current?.recordingState.status === "paused") return;
+      setAudioDuration(segments.reduce((total, segment) => total + segment.durationMs, 0));
       if(segments.length) {
         setRecording({ status: "stopped", nextSequence: Math.max(...segments.map(s=>s.sequence))+1, localSequences: segments.map(s=>s.sequence), uploadedSequences: [] });
         setBackupNotice("Bewaarde vergadering hersteld. Je kunt de opname exporteren of hervatten. De tijd tussen sluiten en hervatten is niet opgenomen.");
@@ -129,7 +138,7 @@ export function App() {
         speech.current.lastFrameAt = now;
         if (rms >= 0.008) { speech.current.lastSpeechAt = now; live.current?.noteSpeech(); }
       },
-      onSegment: segment => { setRecording(instance.recordingState); setReviewed(false); live.current?.notifySavedAudio(segment); },
+      onSegment: segment => { setAudioDuration((segment.startMs ?? 0) + segment.durationMs); setRecording(instance.recordingState); setReviewed(false); live.current?.notifySavedAudio(segment); },
       onError: cause => { setError(cause.message); setRecording({ ...instance.recordingState, status: "stopped" }); live.current?.close(); },
     });
     recorder.current = instance;
@@ -320,72 +329,23 @@ export function App() {
     </section></main>;
   }
 
-  return (
-    <main className="shell">
-      <section className="hero">
-        <p className="eyebrow">AI Vergadersecretaris</p>
-        <h1>Je vergadering, met je notulist.</h1>
-        <p className="intro">
-          Neem op, volg de tekst en overleg tussendoor. Na afloop controleren we de transcriptie voor de notulen.
-        </p>
-        <div className="account-row">
-          {user ? <span>Ingelogd als {user.email ?? user.displayName ?? "Google-gebruiker"}</span> : <span>Log in voor OpenAI-transcriptie.</span>}
-          {user && <button className="secondary-button" onClick={() => void signOutAccount()}>Uitloggen</button>}
-          {!user && <button className="secondary-button" onClick={() => void signIn()}>Log in met Google</button>}
-        </div>
-        <div className="session-row">
-          <span>Sessie gestart {new Date(session.startedAt).toLocaleTimeString("nl-NL", { hour: "2-digit", minute: "2-digit" })}</span>
-          <button className="secondary-button" onClick={startNewSession} disabled={isRecording || isPaused || notesLoading || reviewing || transitioning || restoring || exporting}>
-            Nieuwe sessie
-          </button>
-        </div>
-
-        {error && <p className="error" role="alert">{error}</p>}
-      </section>
-
-      <section className="meeting-workspace" aria-label="Vergadering en notulist">
-        <div className="record-actions">
-          {!isRecording && (
-            <button className="record-button" onClick={() => void startOrResume()} disabled={!canUseApp(user) || reviewing || notesLoading || transitioning || restoring || exporting}>
-              {isPaused || recording.localSequences.length>0 ? "Hervat vergadering" : "Start vergadering"}
-            </button>
-          )}
-          {isRecording && <button className="secondary-button" onClick={() => void pause()} disabled={transitioning}>Pauzeer</button>}
-          {(isRecording || isPaused) && <button className="secondary-button" onClick={() => void stop()} disabled={transitioning}>Rond vergadering af</button>}
-          {!isRecording && !isPaused && recording.localSequences.length>0 && <button className="secondary-button" disabled={exporting || restoring || (transitioning && !reviewing)} onClick={()=>void exportAudio()}>{exporting?"Opname exporteren…":"Download opname"}</button>}
-          {(transcripts.length>0 || notes) && <button className="secondary-button" onClick={exportText}>Download tekstback-up</button>}
-        </div>
-        {restoring && <p role="status">Bewaarde vergadering herstellen…</p>}
-        {limitedStorage && !isRecording && <div className="storage-warning" role="alert"><p>Er lijkt onvoldoende vrije opslag voor de resterende opname tot vier uur met reserve. Maak ruimte vrij of exporteer eerdere opnamen.</p><button className="secondary-button" disabled={transitioning || restoring || exporting} onClick={()=>void startOrResume(true)}>Toch starten met beperkte opslag</button></div>}
-        {storageCheck?.status === "unknown" && <p className="muted">Vrije opslag kon niet worden gecontroleerd. Houd ruimte vrij voor ongeveer 700 MB audio bij vier uur opname.</p>}
-        {isRecording && storageCheck?.status === "low" && <p role="alert">De vrije opslag wordt krap. Rond af en exporteer de opname voordat de opslag vol raakt.</p>}
-        {isRecording && <p className="muted">{wakeActive?"Scherm wakker houden is actief.":"Scherm wakker houden is niet actief. Houd de app zichtbaar en voorkom dat het apparaat vergrendelt."} Sluit het apparaat aan op stroom.</p>}
-        {backupNotice && <p role="status">{backupNotice}</p>}
-      <div className="meeting-workspace-heading"><h2>Deze vergadering</h2><p>{isRecording ? "Opname loopt · overleg gerust tussendoor" : isPaused ? "Opname gepauzeerd · overleg blijft beschikbaar" : "Opname, tekst en overleg op één plek"}</p></div>
-      <VoicePanel key={meetingId} meetingId={meetingId} transcripts={transcripts} notes={notes} stopSignal={stopSignal} getMicrophone={() => recorder.current?.cloneMicrophone()} recording={isRecording} initialBriefing={briefingSnapshot} onBriefingUpdated={summary=>{setBriefingSnapshot(summary);void store.current.saveMeeting(meetingId,{briefing:summary}).catch(checkpointIssue);}} onConsultationChange={changeConsultation} liveAvailable={liveState === "live"} getSpeechActivity={() => ({ ...speech.current, transcriptPending: live.current?.unsettled ?? true })}
-        onNotesUpdated={(updated) => { if (sessionIdRef.current === updated.meetingId) {setNotes(updated);void store.current.saveMeeting(meetingId,{notes:updated}).catch(checkpointIssue);} }} />
-
-      <section className="transcript-card">
+  const liveContent = (<section className="transcript-card">
         <div className="transcript-heading">
-          <div><span className="label">Transcriptie</span><h2>Live tekst</h2></div>
+          <h2>Live tekst</h2>
           <div className="queue-actions">
             <span>{consulting && isRecording ? "Live tekst gepauzeerd · overleg met Kneut" : reviewed ? "Na afloop verwerkt" : liveState === "live" ? "Live · voorlopig" : liveState === "blocked" ? "Live herstel vraagt aandacht" : liveState === "recovering" ? "Tekst inhalen · Kneut wacht" : liveState === "connecting" ? "Live verbinding maken…" : "Lokale audio beschikbaar"}</span>
             {(liveState === "offline" || liveState === "blocked" || (!isRecording && recording.localSequences.length>0)) && <button className="retry-button" disabled={reviewing || transitioning || isPaused} onClick={retryTranscriptie}>{isRecording ? "Live tekst herstellen" : "Transcript opnieuw controleren"}</button>}
-            {!isRecording && !isPaused && recording.localSequences.length>0 && <button className="secondary-light-button" onClick={() => void generateNotes()} disabled={notesLoading || reviewing || transitioning || restoring || exporting}>{notesLoading ? "Notulen maken…" : "Maak definitieve notulen"}</button>}
-
           </div>
         </div>
-        {transcripts.length === 0 ? <p className="muted">Start de vergadering. De tekst verschijnt doorlopend en is voorlopig tot de controle na afloop.</p> : transcripts.map((transcript) => (
-          <p className="transcript-line" key={transcript.sequence}><span>{transcript.provisional ? "Live" : `#${transcript.sequence}`}</span>{transcript.text}{transcript.overlapUncertain && <small className="transcript-warning">Overlap bij deze grens controleren; er is geen tekst stilzwijgend verwijderd.</small>}</p>
+        {transcripts.length === 0 ? <p className="muted">De tekst verschijnt zodra de vergadering begint.</p> : transcripts.map((transcript) => (
+          <p className="transcript-line" key={transcript.sequence}>{transcript.text}{transcript.overlapUncertain && <small className="transcript-warning">Overlap bij deze grens controleren; er is geen tekst stilzwijgend verwijderd.</small>}</p>
         ))}
-      </section>
-
-      {liveState === "recovering" && <p role="status">Tekst bijwerken: {Math.floor((live.current?.progress?.processedMs ?? 0)/60000)} van {Math.ceil((live.current?.progress?.availableMs ?? 0)/60000)} minuten audio verwerkt. Kneut wacht op actuele tekst.</p>}
-      {liveState === "offline" && <p className="muted" role="status">Live tekst is onderbroken. De opname blijft lokaal doorlopen. De verbinding wordt automatisch hersteld en opgeslagen audio wordt ingehaald; Kneut wacht totdat de tekst is bijgewerkt.</p>}
-      {reviewing && <p role="status">Transcriptie controleren vanuit de opname: {progress.done} van {progress.total || "…"} vensters. Je kunt hierna definitieve notulen maken.</p>}
+  </section>);
+  const notesContent = (<div className="notes-content">
+    {!isRecording && !isPaused && recording.localSequences.length>0 && <button className="secondary-light-button" onClick={() => void generateNotes()} disabled={notesLoading || reviewing || transitioning || restoring || exporting}>{notesLoading ? "Notulen maken…" : "Maak definitieve notulen"}</button>}
       {notes && <section className="notes-card">
         <div className="transcript-heading">
-          <div><span className="label">AI-uitwerking</span><h2>Notulen</h2></div>
+          <h2>Notulen</h2>
           <span className="muted">{notes.actionItems.length} actiepunten</span>
         </div>
         <p className="notes-summary">{notes.summary}</p>
@@ -405,32 +365,49 @@ export function App() {
           <ul>{notes.clarificationQuestions.map((question) => <li key={question}>{question}</li>)}</ul>
         </div>}
       </section>}
+{!notes && <p className="muted">{isRecording || isPaused ? "Rond de vergadering af om definitieve notulen te maken." : "De definitieve notulen verschijnen hier na het verwerken van de opname."}</p>}
+</div>);
 
-      </section>
-
-      {savedMeetings.length>0 && <section className="transcript-card"><label htmlFor="restore-meeting">Lokaal bewaarde vergadering openen</label><select id="restore-meeting" value={meetingId} disabled={isRecording || isPaused || reviewing || notesLoading || transitioning || restoring || exporting} onChange={event=>void restoreMeeting(event.target.value)}><option value={meetingId}>Deze vergadering</option>{savedMeetings.filter(item=>item.id!==meetingId).map(item=><option key={item.id} value={item.id}>{new Date(item.startedAt).toLocaleString("nl-NL")} · {item.count} audioblokken</option>)}</select><p className="muted">De audio blijft op dit apparaat staan. Open een bewaarde opname om die later te controleren of te herstellen.</p></section>}
-
-
-      <section className="status-card" aria-live="polite">
-        <div>
-          <span className="label">Status</span>
-          <strong>{isRecording ? "Opname loopt" : isPaused ? "Gepauzeerd" : "Gereed"}</strong>
+  return (
+    <main className="shell">
+      <header className="meeting-header">
+        <div><h1>Kneut <span>· Vergadering</span></h1>
+          <p className={`recording-status ${isRecording ? "is-recording" : ""}`} ><span className="status-dot" aria-hidden="true" /><span role="status">{isRecording ? "Opname loopt" : isPaused ? "Gepauzeerd" : recording.localSequences.length ? "Opname afgerond" : "Klaar om te beginnen"}</span><span className="recording-time" aria-label="Opgenomen tijd">{new Date(audioDuration).toISOString().slice(11,19)}</span></p>
         </div>
-        <div>
-          <span className="label">Lokale segmenten</span>
-          <strong>{recording.localSequences.length}</strong>
+        <details className="meeting-menu" ref={meetingMenu}>
+          <summary aria-label="Vergaderopties" title="Vergaderopties">⋮</summary>
+          <div className="meeting-menu-content" onClick={event=>{if((event.target as HTMLElement).closest("button"))meetingMenu.current?.removeAttribute("open");}}>
+            <button className="menu-button" onClick={startNewSession} disabled={isRecording || isPaused || notesLoading || reviewing || transitioning || restoring || exporting}>Nieuwe vergadering</button>
+            {savedMeetings.length>0 && <div className="menu-group"><label htmlFor="restore-meeting">Eerdere vergaderingen</label><select id="restore-meeting" value={meetingId} disabled={isRecording || isPaused || reviewing || notesLoading || transitioning || restoring || exporting} onChange={event=>{void restoreMeeting(event.target.value);meetingMenu.current?.removeAttribute("open");}}><option value={meetingId}>Deze vergadering</option>{savedMeetings.filter(item=>item.id!==meetingId).map(item=><option key={item.id} value={item.id}>{new Date(item.startedAt).toLocaleString("nl-NL")}</option>)}</select></div>}
+            {!isRecording && !isPaused && recording.localSequences.length>0 && <button className="menu-button" disabled={exporting || restoring || (transitioning && !reviewing)} onClick={()=>void exportAudio()}>{exporting?"Opname exporteren…":"Download opname"}</button>}
+            {(transcripts.length>0 || notes) && <button className="menu-button" onClick={exportText}>Download tekstback-up</button>}
+            <details className="menu-help"><summary>Help</summary><p>Zeg ‘Kneut’ om met de notulist te praten. Terug naar meeluisteren hervat de live tekst.</p><p>Opnamen blijven op dit apparaat. Download een back-up voordat je browsergegevens wist. Houd de app zichtbaar en sluit het apparaat aan op stroom.</p><p>Transcriptie, samenvatten en overleg gebruiken je OpenAI-budget. Een gesprek stopt na vijf minuten; je kunt daarna opnieuw verbinden. De opname loopt door.</p><p>Gebruik oortjes om de AI-stem uit de opname te houden. AI-antwoorden zijn geen vergaderbesluiten. Controleer na afloop de tekst en notulen.</p></details>
+            <div className="menu-group"><span className="account-name">{user?.email ?? user?.displayName}</span><button className="menu-button" onClick={()=>void signOutAccount()}>Uitloggen</button></div>
+          </div>
+        </details>
+      </header>
+      <section className="meeting-workspace" aria-label="Vergadering en notulist">
+        <div className="record-actions">
+          {!isRecording && <button className="record-button" onClick={()=>void startOrResume()} disabled={!canUseApp(user) || reviewing || notesLoading || transitioning || restoring || exporting}>{isPaused || recording.localSequences.length>0 ? "Hervat vergadering" : "Start vergadering"}</button>}
+          {isRecording && <button className="secondary-button" onClick={()=>void pause()} disabled={transitioning}>Pauzeer</button>}
+          {(isRecording || isPaused) && <button className="finish-button" onClick={()=>void stop()} disabled={transitioning}>Afronden</button>}
         </div>
-        <div>
-          <span className="label">Herstelqueue</span>
-          <strong>{reviewed ? "Gecontroleerd" : `${recording.localSequences.length} blokken bewaard`}</strong>
-        </div>
+        {error && <p className="workspace-error" role="alert">{error}</p>}
+        {restoring && <p role="status">Vergadering herstellen…</p>}
+        {limitedStorage && !isRecording && <div className="storage-warning" role="alert"><p>Onvoldoende vrije opslag voor een lange opname. Maak ruimte vrij of download eerdere opnamen.</p><button className="secondary-button" disabled={transitioning || restoring || exporting} onClick={()=>void startOrResume(true)}>Toch starten met beperkte opslag</button></div>}
+        {storageCheck?.status === "unknown" && <p className="attention-note">Vrije opslag onbekend. Houd ongeveer 700 MB vrij voor vier uur opname.</p>}
+        {isRecording && storageCheck?.status === "low" && <p className="attention-note" role="alert">Opslag bijna vol. Rond af en download de opname.</p>}
+        {isRecording && !wakeActive && <p className="attention-note">Houd de app zichtbaar en voorkom schermvergrendeling.</p>}
+        {backupNotice && <p className="attention-note" role="status">{backupNotice}</p>}
+        {liveState === "recovering" && <p role="status">Live tekst wordt bijgewerkt. Kneut wacht op actuele tekst.</p>}
+        {liveState === "offline" && isRecording && !consulting && <p role="status">Live tekst onderbroken. De opname loopt door; de verbinding wordt automatisch hersteld.</p>}
+        {liveState === "blocked" && <p role="alert">Live tekst vraagt aandacht. Open Live tekst om te herstellen.</p>}
+        {reviewing && <p role="status">Transcriptie controleren: {progress.done} van {progress.total || "…"} delen.</p>}
+      <VoicePanel key={meetingId} meetingId={meetingId} transcripts={transcripts} notes={notes} stopSignal={stopSignal} getMicrophone={() => recorder.current?.cloneMicrophone()} recording={isRecording} initialBriefing={briefingSnapshot} onBriefingUpdated={summary=>{setBriefingSnapshot(summary);void store.current.saveMeeting(meetingId,{briefing:summary}).catch(checkpointIssue);}} onConsultationChange={changeConsultation} liveAvailable={liveState === "live"} getSpeechActivity={() => ({ ...speech.current, transcriptPending: live.current?.unsettled ?? true })}
+        liveContent={liveContent} notesContent={notesContent}
+        onNotesUpdated={(updated) => { if (sessionIdRef.current === updated.meetingId) {setNotes(updated);void store.current.saveMeeting(meetingId,{notes:updated}).catch(checkpointIssue);} }} />
       </section>
-
-      <section className="feature-grid">
-        <article><span>01</span><h2>Offline veilig</h2><p>Audiosegmenten gaan direct naar lokale IndexedDB-opslag.</p></article>
-        <article><span>02</span><h2>Live scherp</h2><p>Doorlopende live tekst voedt hetzelfde overleg met de notulist; de definitieve controle gebruikt de lokale audio.</p></article>
-        <article><span>03</span><h2>Actiegericht</h2><p>Eigenaar en deadline worden gecontroleerd voordat een actiepunt klaar is.</p></article>
-      </section>
+      <details className="recording-details"><summary>Details</summary><dl><div><dt>Gestart</dt><dd>{new Date(session.startedAt).toLocaleString("nl-NL")}</dd></div><div><dt>Opgeslagen audioblokken</dt><dd>{recording.localSequences.length}</dd></div><div><dt>Transcriptiecontrole</dt><dd>{reviewed ? "Gecontroleerd" : "Nog niet gecontroleerd"}</dd></div><div><dt>Scherm wakker houden</dt><dd>{wakeActive ? "Actief" : "Niet actief"}</dd></div></dl></details>
     </main>
   );
 }
