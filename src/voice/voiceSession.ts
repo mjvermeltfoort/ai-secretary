@@ -3,7 +3,7 @@ import { parseActionItemProposal, type VoiceActionItemProposal } from "./voiceCo
 export type VoiceStatus = "idle" | "connecting" | "listening" | "thinking" | "speaking" | "error";
 export interface VoiceToken { value: string; expiresAt: number; model: string; instructions: string; }
 export interface VoiceMessage { id: string; role: "user" | "assistant"; text: string; final: boolean; interrupted?: boolean; }
-export interface VoiceSnapshot { status: VoiceStatus; micMuted: boolean; playbackBlocked: boolean; error?: string; }
+export interface VoiceSnapshot { status: VoiceStatus; micMuted: boolean; playbackBlocked: boolean; error?: string; controlled?: boolean; }
 interface VoiceOptions {
   audio: HTMLAudioElement;
   createToken: () => Promise<VoiceToken>;
@@ -25,6 +25,8 @@ export class VoiceSession {
   private instructions = "";
   private lastContext = "";
   private responding = false;
+  private requested = false;
+  private controlled = false;
   private playing = false;
   private suppressAudio = false;
   private messages = new Map<string, VoiceMessage>();
@@ -32,10 +34,17 @@ export class VoiceSession {
 
   constructor(private readonly options: VoiceOptions) {}
 
-  async start(): Promise<void> {
-    if (!["idle", "error"].includes(this.state.status)) return;
+  async start(controlled = false): Promise<void> {
+    if (!["idle", "error"].includes(this.state.status)) {
+      if (!controlled && this.controlled) {
+        this.interrupt(); this.controlled = false; this.setMicMuted(false); this.configureTurns();
+        this.emit({ controlled: false });
+      }
+      return;
+    }
+    this.controlled = controlled;
     const generation = ++this.generation;
-    this.emit({ status: "connecting", micMuted: false, playbackBlocked: false, error: undefined });
+    this.emit({ status: "connecting", micMuted: controlled, controlled, playbackBlocked: false, error: undefined });
     try {
       if (!navigator.mediaDevices?.getUserMedia || typeof RTCPeerConnection === "undefined") {
         throw new Error("Deze browser ondersteunt geen live spraak. Gebruik een recente versie van Chrome.");
@@ -43,6 +52,7 @@ export class VoiceSession {
       const stream = this.options.getMicrophone?.() ?? await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
       if (generation !== this.generation) { stream.getTracks().forEach((track) => track.stop()); return; }
       this.stream = stream;
+      if (this.controlled) stream.getAudioTracks().forEach(track => { track.enabled = false; });
       const pc = new RTCPeerConnection();
       this.pc = pc;
       this.abort = new AbortController();
@@ -66,6 +76,7 @@ export class VoiceSession {
       channel.onopen = () => {
         if (generation !== this.generation) return;
         clearTimeout(this.connectionTimer);
+        this.configureTurns();
         this.updateContext();
         this.emit({ status: "listening" });
         this.durationTimer = setTimeout(() => {
@@ -98,6 +109,30 @@ export class VoiceSession {
     }
   }
 
+  private configureTurns(): void {
+    this.send({ type: "session.update", session: { type: "realtime", audio: { input: {
+      turn_detection: { type: "semantic_vad", eagerness: "low", create_response: !this.controlled, interrupt_response: true },
+    } } } });
+  }
+
+  async speakControlled(text: string, stillAllowed: () => boolean): Promise<boolean> {
+    if (!stillAllowed() || (!this.controlled && !["idle", "error"].includes(this.state.status))) return false;
+    await this.start(true);
+    if (["idle", "error"].includes(this.state.status)) return false;
+    const generation = this.generation;
+    const until = Date.now() + 30000;
+    while (this.channel?.readyState !== "open") {
+      if (generation !== this.generation || !stillAllowed() || Date.now() >= until) {
+        if (generation === this.generation) this.disconnect();
+        return false;
+      }
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    if (generation !== this.generation || !this.controlled || !stillAllowed()) return false;
+    this.sendText(text.slice(0, 2000));
+    return true;
+  }
+
   updateContext(): void {
     if (this.channel?.readyState !== "open") return;
     const context = this.options.getContext();
@@ -116,6 +151,8 @@ export class VoiceSession {
     const id = `user_${crypto.randomUUID().replaceAll("-", "")}`;
     this.send({ type: "conversation.item.create", item: { id, type: "message", role: "user", content: [{ type: "input_text", text: value }] } });
     this.publish({ id, role: "user", text: value, final: true });
+    this.suppressAudio = false;
+    this.requested = true;
     this.send({ type: "response.create" });
     this.emit({ status: "thinking" });
   }
@@ -134,11 +171,12 @@ export class VoiceSession {
   }
 
   interrupt(manual = true): void {
-    if (manual && this.responding) this.send({ type: "response.cancel" });
+    if (manual && (this.responding || this.requested)) this.send({ type: "response.cancel" });
     if (manual && this.playing) this.send({ type: "output_audio_buffer.clear" });
     this.options.audio.muted = true;
     this.suppressAudio = true;
     this.responding = false;
+    this.requested = false;
     this.playing = false;
     for (const message of this.messages.values()) {
       if (message.role === "assistant" && !message.final) this.publish({ ...message, final: true, interrupted: true });
@@ -169,10 +207,11 @@ export class VoiceSession {
     this.pc = undefined;
     this.stream = undefined;
     this.responding = false;
+    this.requested = false;
     this.playing = false;
     this.lastContext = "";
     this.suppressAudio = false;
-    this.emit({ status: "idle", micMuted: false, playbackBlocked: false });
+    this.emit({ status: "idle", micMuted: false, controlled: false, playbackBlocked: false });
   }
 
   private fail(error: string): void {
@@ -202,11 +241,13 @@ export class VoiceSession {
         this.emit({ status: "listening" });
         break;
       case "input_audio_buffer.speech_stopped":
+        if (!this.controlled) this.suppressAudio = false;
         this.updateContext();
         this.emit({ status: "thinking" });
         break;
       case "response.created":
-        this.suppressAudio = false;
+        this.requested = false;
+        if (this.suppressAudio) { this.send({ type: "response.cancel" }); break; }
         this.responding = true;
         this.emit({ status: "thinking" });
         break;

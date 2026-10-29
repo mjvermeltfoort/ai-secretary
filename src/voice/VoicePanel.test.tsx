@@ -3,8 +3,9 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MeetingNotes } from "../notes/notesClient";
 
-const rig = vi.hoisted(() => ({ options: null as any, start: vi.fn(), disconnect: vi.fn(), sendText: vi.fn(), updateContext: vi.fn(), notifyDecision: vi.fn(), save: vi.fn() }));
+const rig = vi.hoisted(() => ({ options: null as any, start: vi.fn(), disconnect: vi.fn(), sendText: vi.fn(), updateContext: vi.fn(), notifyDecision: vi.fn(), save: vi.fn(), assess: vi.fn(), speakControlled: vi.fn(), interrupt: vi.fn() }));
 vi.mock("../notes/notesClient", () => ({ saveActionItemProposal: rig.save }));
+vi.mock("./kneutClient", () => ({ assessClarity: rig.assess }));
 vi.mock("./voiceClient", () => ({ createVoiceToken: vi.fn() }));
 vi.mock("./voiceSession", () => ({ VoiceSession: class {
   constructor(options: any) { rig.options = options; }
@@ -13,6 +14,8 @@ vi.mock("./voiceSession", () => ({ VoiceSession: class {
   sendText = rig.sendText;
   updateContext = rig.updateContext;
   notifyDecision = rig.notifyDecision;
+  speakControlled = rig.speakControlled;
+  interrupt = rig.interrupt;
 } }));
 import { VoicePanel } from "./VoicePanel";
 
@@ -20,8 +23,8 @@ const notes: MeetingNotes = { meetingId: "m1", revision: "rev1", summary: "Vrijd
 const proposal = { notesRevision: "rev1", itemIndex: 0, description: "Planning maken", owner: "Sarah", deadline: "Donderdag" };
 const onNotesUpdated = vi.fn();
 function panel(current = notes) { return <VoicePanel meetingId="m1" notes={current} transcripts={[]} onNotesUpdated={onNotesUpdated} />; }
-beforeEach(() => { vi.clearAllMocks(); });
-afterEach(() => { cleanup(); });
+beforeEach(() => { vi.clearAllMocks(); localStorage.clear(); });
+afterEach(() => { cleanup(); vi.useRealTimers(); });
 
 describe("voice panel", () => {
   it("never starts a paid connection automatically and closes on unmount", () => {
@@ -63,5 +66,30 @@ describe("voice panel", () => {
     act(() => { result = rig.options.onProposal({ ...proposal, notesRevision: "old" }); });
     expect(result!).toContain("notulen zijn gewijzigd");
     expect(screen.queryByRole("button", { name: "Wijziging opslaan" })).toBeNull();
+  });
+});
+
+
+describe("Kneut meeting integration", () => {
+  it("shows open questions silently, accepts a wake question and persists deferral", async () => {
+    vi.useFakeTimers();vi.setSystemTime(new Date("2026-10-29T13:00:00Z"));
+    let speechAt = Date.now()-10000;
+    const getSpeechActivity = () => ({lastSpeechAt:speechAt,lastFrameAt:Date.now()});
+    const open = {id:"kleding",question:"Wie bestelt de kleding?",evidence:"We bestellen kleding."};
+    rig.assess.mockResolvedValue({questions:[open],transition:false});rig.speakControlled.mockResolvedValue(true);
+    const props = {meetingId:"m1",onNotesUpdated,recording:true,liveAvailable:true,getSpeechActivity};
+    const view=render(<VoicePanel {...props} transcripts={[]} />);
+    view.rerender(<VoicePanel {...props} transcripts={[{meetingId:"m1",sequence:1,text:"We bestellen kleding. Welke kleur?",model:"test",provisional:true,liveFinal:true}]} />);
+    await act(async()=>{await vi.advanceTimersByTimeAsync(500);});
+    expect(screen.getByText(open.question)).toBeTruthy();expect(rig.speakControlled).not.toHaveBeenCalled();
+    view.rerender(<VoicePanel {...props} transcripts={[{meetingId:"m1",sequence:1,text:"We bestellen kleding. Welke kleur?",model:"test",provisional:true,liveFinal:true},{meetingId:"m1",sequence:2,text:"Kneut, wat is besloten?",model:"test",provisional:true,liveFinal:true}]} />);
+    await act(async()=>{await vi.advanceTimersByTimeAsync(300);});
+    expect(rig.speakControlled).toHaveBeenCalledWith("wat is besloten?",expect.any(Function));
+    const allowed=rig.speakControlled.mock.calls[0][1];speechAt=Date.now();expect(allowed()).toBe(false);
+    fireEvent.click(screen.getByRole("button",{name:"Bewaar vragen tot het einde"}));
+    expect(JSON.parse(localStorage.getItem("kneut-m1")!).deferred).toBe(true);
+    view.rerender(<VoicePanel {...props} recording={false} stopSignal={1} transcripts={[]} />);
+    expect(screen.getByRole("button",{name:"Bespreek open vragen na afloop"})).toBeTruthy();
+    expect(rig.disconnect).toHaveBeenCalled();
   });
 });

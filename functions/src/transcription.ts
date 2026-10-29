@@ -19,7 +19,7 @@ export const createTranscriptionSession = onCall({ ...options, secrets: [key] },
       headers: { Authorization: `Bearer ${secret}`, "Content-Type": "application/json" },
       body: JSON.stringify({ expires_after: { anchor: "created_at", seconds: 60 }, session: {
         type: "transcription", audio: { input: { format: { type: "audio/pcm", rate: 24000 },
-          transcription: { model: "gpt-live-transcribe", languages: ["nl"], delay: "medium", prompt: "Nederlandstalige vergadering. Namen, getallen, vaktermen en besluiten nauwkeurig overnemen. Geen sprekerlabels." },
+          transcription: { model: "gpt-live-transcribe", languages: ["nl"], delay: "medium", prompt: "Nederlandstalige vergadering. Namen, getallen, vaktermen en besluiten nauwkeurig overnemen. Geen sprekerlabels. De AI-notulist heet Kneut; die naam alleen opschrijven als hij hoorbaar wordt uitgesproken." },
           turn_detection: null,
         } },
       } }),

@@ -56,3 +56,9 @@ actiepuntcorrecties, architectuur en de eerste praktijktest.
 Opnemen, live transcriptie en overleg met de notulist zijn één sessie.
 Zie [CONTINUOUS_MEETING.md](docs/CONTINUOUS_MEETING.md) voor de doorlopende
 opname, controle na afloop en lokaal herstel. Sprekerherkenning is niet toegevoegd.
+
+## Kneut aanspreken en verduidelijkingen
+
+Zeg **Kneut** aan het begin van je vraag tijdens een lopende vergadering.
+Kneut bewaart open vragen en stelt ze alleen bij een duidelijke overgang met
+stilte. Zie [KNEUT.md](docs/KNEUT.md) voor bediening, uitstellen en grenzen.

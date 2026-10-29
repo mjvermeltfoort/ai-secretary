@@ -8,6 +8,7 @@ export interface TranscriptResult {
   text: string;
   model: string;
   provisional?: boolean;
+  liveFinal?: boolean;
   overlapUncertain?: boolean;
 }
 

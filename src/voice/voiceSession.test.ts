@@ -53,7 +53,7 @@ describe("voice connection lifecycle", () => {
   it("uses an ephemeral key, loads context, and releases only its own microphone", async () => {
     await current.voice.start();
     expect(current.fetcher).toHaveBeenCalledWith("https://api.openai.com/v1/realtime/calls", expect.objectContaining({ headers: { Authorization: "Bearer ek_test", "Content-Type": "application/sdp" }, body: "test-offer" }));
-    expect(current.channel().sent[0]).toMatchObject({ type: "session.update", session: { instructions: expect.stringContaining("server instructions") } });
+    expect(current.channel().sent.find(event => event.session?.instructions)).toMatchObject({ type: "session.update", session: { instructions: expect.stringContaining("server instructions") } });
     expect(current.snapshots.at(-1)?.status).toBe("listening");
     current.voice.setMicMuted(true);
     expect(current.track.enabled).toBe(false);
@@ -117,6 +117,11 @@ describe("live conversation", () => {
     expect(dc.sent.slice(-2).map((e) => e.type)).toEqual(["response.cancel", "output_audio_buffer.clear"]);
     dc.event({ type: "output_audio_buffer.started" });
     expect(current.audio.muted).toBe(true);
+    // Late response.created after cancellation must stay muted too.
+    dc.event({ type: "response.created" });
+    dc.event({ type: "output_audio_buffer.started" });
+    expect(current.audio.muted).toBe(true);
+    current.voice.sendText("Nieuwe vraag");
     dc.event({ type: "response.created" });
     dc.event({ type: "output_audio_buffer.started" });
     expect(current.audio.muted).toBe(false);
@@ -177,4 +182,40 @@ it("uses an isolated clone of the meeting microphone without requesting a second
     onSnapshot: () => {}, onMessage: () => {}, onProposal: () => "pending" });
   await voice.start();expect(current.getUserMedia).not.toHaveBeenCalled();
   voice.disconnect();expect(track.stop).toHaveBeenCalledOnce();expect(current.track.stop).not.toHaveBeenCalled();
+});
+
+
+describe("app-controlled meeting speech", () => {
+  it("keeps the cloned microphone muted and never enables automatic responses", async () => {
+    expect(await current.voice.speakControlled("Wie bestelt de kleding?", () => true)).toBe(true);
+    expect(current.track.enabled).toBe(false);
+    const config = current.channel().sent.find(event => event.session?.audio);
+    expect(config!.session.audio.input.turn_detection.create_response).toBe(false);
+    expect(current.channel().sent.filter(event => event.type === "response.create")).toHaveLength(1);
+    await current.voice.start();
+    expect(current.track.enabled).toBe(true);
+    expect(current.snapshots.at(-1)?.controlled).toBe(false);
+  });
+  it("rechecks permission after connecting and drops obsolete speech", async () => {
+    let allowed = true;
+    current.createToken.mockImplementationOnce(async () => {
+      allowed = false;
+      return { value: "ek_test", expiresAt: Date.now()/1000+60, model: "test", instructions: "test" };
+    });
+    expect(await current.voice.speakControlled("Oude vraag", () => allowed)).toBe(false);
+    expect(current.channel().sent.some(event => event.type === "response.create")).toBe(false);
+  });
+  it("returns promptly if a controlled connection fails", async () => {
+    current.createToken.mockRejectedValueOnce(new Error("Geen toegang"));
+    expect(await current.voice.speakControlled("Vraag", () => true)).toBe(false);
+    expect(current.snapshots.at(-1)?.status).toBe("error");
+  });
+  it("cancels a requested response even before response.created arrives", async () => {
+    await current.voice.speakControlled("Vraag", () => true);
+    current.voice.interrupt();
+    expect(current.channel().sent.at(-1)?.type).toBe("response.cancel");
+    current.channel().event({type: "response.created"});
+    current.channel().event({type: "output_audio_buffer.started"});
+    expect(current.audio.muted).toBe(true);
+  });
 });
