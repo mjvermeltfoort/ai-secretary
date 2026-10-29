@@ -26,3 +26,10 @@ describe("meeting context", () => {
     for (const value of [null, {}, { ...valid, itemIndex: -1 }, { ...valid, notesRevision: "" }, { ...valid, description: "x".repeat(2001) }, { ...valid, deadline: 123 }]) expect(parseActionItemProposal(value)).toBeUndefined();
   });
 });
+
+it("provides a whole-meeting summary beside recent text and drops a stale summary",()=>{
+ const transcripts=[{meetingId:"m",sequence:1,text:"Eerste onderwerp",model:"test"},{meetingId:"m",sequence:2,text:"Laatste onderwerp",model:"test"}];
+ const summary={sourceText:"Eerste onderwerp\nLaatste onderwerp",summary:"Algemeen: twee onderwerpen besproken.",provisional:false};
+ expect(JSON.parse(meetingVoiceContext("m",transcripts,undefined,summary)).briefing.summary).toBe(summary.summary);
+ expect(JSON.parse(meetingVoiceContext("m",[...transcripts,{meetingId:"m",sequence:3,text:"Nieuwe afspraak",model:"test"}],undefined,summary)).briefing).toBeNull();
+});

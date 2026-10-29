@@ -5,7 +5,8 @@ import type { TranscriptResult } from "../transcription/transcriptionClient";
 import { KneutController, type KneutState } from "./kneutController";
 import { assessClarity } from "./kneutClient";
 import { createVoiceToken } from "./voiceClient";
-import { meetingVoiceContext } from "./voiceContext";
+import { prepareVoiceBriefing } from "./voiceBriefing";
+import { briefingSource, meetingVoiceContext, type VoiceBriefing } from "./voiceContext";
 import { VoiceSession, type VoiceMessage, type VoiceSnapshot } from "./voiceSession";
 
 interface Props {
@@ -16,6 +17,9 @@ interface Props {
   getMicrophone?: () => MediaStream | undefined;
   stopSignal?: number;
   recording?: boolean;
+  initialBriefing?: VoiceBriefing;
+  onBriefingUpdated?: (briefing: VoiceBriefing) => void;
+  onConsultationChange?: (active: boolean) => void;
   liveAvailable?: boolean;
   getSpeechActivity?: () => { lastSpeechAt: number; lastFrameAt: number; transcriptPending?: boolean };
 }
@@ -41,6 +45,16 @@ export function VoicePanel(props: Props) {
   const latest = useRef(props);
   latest.current = props;
   const alive = useRef(true);
+  const briefing = useRef<VoiceBriefing | undefined>(props.initialBriefing);
+  const [generalSummary, setGeneralSummary] = useState<VoiceBriefing | undefined>(props.initialBriefing);
+  const [summaryWorking, setSummaryWorking] = useState(false);
+  const summaryEpoch = useRef(0);
+  const summaryTask = useRef<{sourceText:string;explicit:boolean;promise:Promise<VoiceBriefing>} | undefined>(undefined);
+  const preparationEpoch = useRef(0);
+  const [preparing, setPreparing] = useState(false);
+  const [briefingProgress, setBriefingProgress] = useState({done:0,total:0});
+  const [briefingError, setBriefingError] = useState<string>();
+  const consultationActive = useRef(false);
   const pendingRef = useRef<PendingProposal | undefined>(undefined);
   const [snapshot, setSnapshot] = useState(initial);
   const [messages, setMessages] = useState<VoiceMessage[]>([]);
@@ -63,8 +77,16 @@ export function VoicePanel(props: Props) {
       audio: audio.current!,
       createToken: () => createVoiceToken(props.meetingId),
       getMicrophone: () => latest.current.getMicrophone?.(),
-      getContext: () => meetingVoiceContext(props.meetingId, latest.current.transcripts, latest.current.notes),
-      onSnapshot: (value) => { if (alive.current) setSnapshot(value); },
+      getContext: () => meetingVoiceContext(props.meetingId, latest.current.transcripts, latest.current.notes, briefing.current),
+      onSnapshot: (value) => {
+        if (!alive.current) return;
+        setSnapshot(value);
+        if (["idle", "error"].includes(value.status) && consultationActive.current) {
+          consultationActive.current = false;++preparationEpoch.current;setPreparing(false);
+          if(summaryTask.current && !summaryTask.current.explicit){++summaryEpoch.current;setSummaryWorking(false);}
+          latest.current.onConsultationChange?.(false);
+        }
+      },
       onMessage: (message) => {
         if (!alive.current) return;
         setMessages((current) => {
@@ -87,9 +109,11 @@ export function VoicePanel(props: Props) {
     });
     session.current = voice;
     return () => {
-      alive.current = false;
+      alive.current = false;++preparationEpoch.current;++summaryEpoch.current;
       voice.disconnect();
       session.current = null;
+      if (consultationActive.current && !latest.current.recording) latest.current.onConsultationChange?.(false);
+      consultationActive.current = false;
     };
   }, [props.meetingId]);
 
@@ -110,8 +134,9 @@ export function VoicePanel(props: Props) {
           manualDialogue: !voice.controlled && !["idle", "error"].includes(voice.status),
         };
       },
+      ask: (text, displayText) => beginDialogue(text, displayText),
       assess: text => assessClarity(props.meetingId, text),
-      speak: (text, allowed) => session.current?.speakControlled(text, allowed) ?? Promise.resolve(false),
+      speak: (text, allowed, displayText) => session.current?.speakControlled(text, allowed, displayText) ?? Promise.resolve(false),
       interrupt: () => session.current?.interrupt(),
       onChange: state => {
         setKneut(state);
@@ -129,6 +154,67 @@ export function VoicePanel(props: Props) {
     const node = chatLog.current;
     if (node) node.scrollTop = node.scrollHeight;
   }, [messages]);
+
+  useEffect(()=>{
+    if(props.initialBriefing){briefing.current=props.initialBriefing;setGeneralSummary(props.initialBriefing);}
+  },[props.initialBriefing]);
+
+  async function ensureSummary(explicit:boolean, consumerAllowed:()=>boolean=()=>alive.current):Promise<VoiceBriefing> {
+    if(!consumerAllowed())throw new Error("Voorbereiden is afgebroken.");
+    const id=latest.current.meetingId,sourceText=briefingSource(id,latest.current.transcripts);
+    if(briefing.current?.sourceText===sourceText)return briefing.current;
+    if(summaryTask.current){
+      if(explicit)summaryTask.current.explicit=true;
+      const existing=summaryTask.current;
+      try{const result=await existing.promise;if(!consumerAllowed())throw new Error("Voorbereiden is afgebroken.");if(result.sourceText===sourceText)return result;}catch(cause){if(!consumerAllowed()||existing.sourceText===sourceText)throw cause;}
+    }
+    if(!consumerAllowed())throw new Error("Voorbereiden is afgebroken.");
+    const epoch=++summaryEpoch.current;
+    const allowed=()=>alive.current && epoch===summaryEpoch.current && latest.current.meetingId===id;
+    setSummaryWorking(true);setBriefingProgress({done:0,total:0});setBriefingError(undefined);
+    const promise=prepareVoiceBriefing(id,latest.current.transcripts,allowed,(done,total)=>{if(allowed())setBriefingProgress({done,total});})
+      .then(result=>{
+        if(!allowed())throw new Error("Voorbereiden is afgebroken.");
+        briefing.current=result;setGeneralSummary(result);latest.current.onBriefingUpdated?.(result);return result;
+      }).finally(()=>{if(allowed())setSummaryWorking(false);if(summaryTask.current?.promise===promise)summaryTask.current=undefined;});
+    summaryTask.current={sourceText,explicit,promise};
+    return promise;
+  }
+  async function updateGeneralSummary() {
+    try{await ensureSummary(true);}catch(cause){if(alive.current)setBriefingError(cause instanceof Error?cause.message:"Samenvatten is mislukt. Probeer het opnieuw.");}
+  }
+
+  function cancelPreparation() {
+    ++preparationEpoch.current;setPreparing(false);setBriefingError(undefined);
+    if(summaryTask.current && !summaryTask.current.explicit){++summaryEpoch.current;setSummaryWorking(false);}
+    consultationActive.current=false;session.current?.disconnect();latest.current.onConsultationChange?.(false);
+  }
+
+  async function beginDialogue(text?: string, displayText?: string): Promise<boolean> {
+    if (consultationActive.current) {
+      if (preparing) return false;
+      return await session.current?.startDialogue(text, displayText) ?? false;
+    }
+    const epoch=++preparationEpoch.current,id=latest.current.meetingId;
+    const allowed=()=>alive.current && epoch===preparationEpoch.current && latest.current.meetingId===id && consultationActive.current;
+    consultationActive.current=true;latest.current.onConsultationChange?.(true);session.current?.interrupt();
+    setPreparing(true);setBriefingError(undefined);setBriefingProgress({done:0,total:0});
+    try {
+      const summary=await ensureSummary(false,allowed);
+      if(!allowed())return false;
+      if(summary.sourceText!==briefingSource(id,latest.current.transcripts))throw new Error("De vergadertekst is intussen bijgewerkt. Start het gesprek opnieuw voor een actuele samenvatting.");
+      briefing.current=summary;setPreparing(false);
+      const started=await session.current?.startDialogue(text,displayText)??false;
+      if(!started && consultationActive.current) {consultationActive.current=false;latest.current.onConsultationChange?.(false);}
+      return started;
+    } catch(cause) {
+      if(allowed()) {
+        setBriefingError(cause instanceof Error?cause.message:"De samenvatting kon niet worden voorbereid. Probeer het gesprek opnieuw te starten.");
+        consultationActive.current=false;latest.current.onConsultationChange?.(false);
+      }
+      return false;
+    } finally {if(epoch===preparationEpoch.current)setPreparing(false);}
+  }
 
   function sendQuestion(event: FormEvent) {
     event.preventDefault();
@@ -162,26 +248,38 @@ export function VoicePanel(props: Props) {
     session.current?.notifyDecision("De gebruiker heeft het voorstel afgewezen. Er is niets gewijzigd.");
   }
 
-  return <section className={`voice-panel voice-${snapshot.status}`} aria-labelledby="voice-heading">
+  return <section className={`voice-panel voice-state-${snapshot.status}`} aria-labelledby="voice-heading">
     <div className="voice-intro">
       <div className="notulist-character" role="img" aria-label={`AI-notulist: ${labels[snapshot.status]}`}>
         <div className="character-halo" /><div className="character-face"><i className="character-eye" /><i className="character-eye" /><span className="character-mouth" /></div>
       </div>
       <div className="voice-title"><span className="label">Jouw AI-notulist</span><h2 id="voice-heading">Kneut, je notulist</h2>
-        <p className="voice-status" role="status">{kneut.listening ? "Kneut luistert naar je vraag…" : snapshot.controlled && snapshot.status === "listening" ? "Kneut luistert stil mee via de vergadertekst" : snapshot.micMuted && snapshot.status === "listening" ? "Microfoon uit · je kunt ook typen" : labels[snapshot.status]}</p>
-        <p className="voice-explainer">{props.recording
-          ? "Zeg ‘Kneut’ en stel je vraag. Ik bewaar onduidelijkheden en vraag alleen bij een duidelijke overgang om uitleg."
+        <p className="voice-status" role="status">{preparing ? "Kneut leest de vergadering bij…" : kneut.listening ? "Kneut luistert naar je vraag…" : snapshot.controlled && snapshot.status === "listening" ? "Kneut luistert stil mee via de vergadertekst" : snapshot.micMuted && snapshot.status === "listening" ? "Microfoon uit · je kunt ook typen" : labels[snapshot.status]}</p>
+        <p className="voice-explainer">{preparing ? "Ik lees de beschikbare vergadertekst zodat ik je vragen kan beantwoorden." : active && !snapshot.controlled
+          ? "Je praat nu met Kneut. Kies Terug naar meeluisteren om de live transcriptie te hervatten."
+          : props.recording ? "Zeg ‘Kneut’ en stel je vraag. Ik bewaar onduidelijkheden en vraag alleen bij een duidelijke overgang om uitleg."
           : "Start een gesprek om me iets te vragen. Open vragen blijven hieronder zichtbaar."}</p>
       </div>
     </div>
     <div className="voice-controls">
-      {!active || snapshot.controlled ? <button className="record-button" onClick={() => void session.current?.start()}>Praat met de notulist</button>
+      {preparing ? <button className="secondary-button" onClick={cancelPreparation}>Voorbereiden annuleren</button> : !active || snapshot.controlled ? <button className="record-button" onClick={() => void beginDialogue()}>Praat met de notulist</button>
         : <button className="secondary-button" onClick={() => session.current?.disconnect()}>{connected ? "Terug naar meeluisteren" : "Annuleren"}</button>}
       {connected && !snapshot.controlled && <>
         <button className="voice-outline-button" aria-pressed={snapshot.micMuted} onClick={() => session.current?.setMicMuted(!snapshot.micMuted)}>{snapshot.micMuted ? "Microfoon aan" : "Microfoon uit"}</button>
         {(snapshot.status === "speaking" || snapshot.status === "thinking") && <button className="voice-outline-button" onClick={() => session.current?.interrupt()}>Onderbreek antwoord</button>}
       </>}
     </div>
+    {summaryWorking && briefingProgress.total>0 && <p role="status">Samenvatting voorbereiden: {briefingProgress.done} van {briefingProgress.total} tekstdelen.</p>}
+    {briefingError && <p className="voice-error" role="alert">{briefingError}</p>}
+    <section className="meeting-summary" aria-label="Algemene samenvatting">
+      <h3>Wat is er besproken?</h3>
+      <button className="voice-outline-button" disabled={summaryWorking || !briefingSource(props.meetingId,props.transcripts)} onClick={()=>void updateGeneralSummary()}>{summaryWorking?"Samenvatting voorbereiden…":generalSummary?"Samenvatting bijwerken":"Maak algemene samenvatting"}</button>
+      {generalSummary ? <>
+        {generalSummary.sourceText!==briefingSource(props.meetingId,props.transcripts) && <p className="muted">Er is nieuwere vergadertekst beschikbaar. Werk de samenvatting bij voor de laatste stand.</p>}
+        <p className="summary-text">{generalSummary.summary}</p>
+        {generalSummary.provisional && <p className="muted">Gebaseerd op de beschikbare live tekst; controle na afloop kan dit nog wijzigen.</p>}
+      </> : <p className="muted">De belangrijkste onderwerpen, standpunten, besluiten en actiepunten komen hier samen. Deze samenvatting gaat ook mee in het gesprek met Kneut.</p>}
+    </section>
     <div className="kneut-questions">
       <div className="voice-controls">
         <button className="voice-outline-button" aria-pressed={kneut.deferred} onClick={() => controller.current?.defer(!kneut.deferred)}>{kneut.deferred ? "Vragen bij overgangen weer toestaan" : "Bewaar vragen tot het einde"}</button>
@@ -189,11 +287,11 @@ export function VoicePanel(props: Props) {
       </div>
       {props.recording && !props.liveAvailable && <p role="status">Aanspreken met ‘Kneut’ wacht op de live transcriptie.</p>}
       {kneut.deferred && <p role="status">Kneut bewaart zijn vragen tot het einde. Je kunt hem blijven aanspreken.</p>}
-      {kneut.questions.length > 0 && <>{!props.recording && <button className="voice-outline-button" onClick={() => void session.current?.speakControlled(`Lees deze open vragen kort voor: ${JSON.stringify(kneut.questions)}`, () => !latest.current.recording)}>Bespreek open vragen na afloop</button>}<h3>Open vragen{props.recording ? "" : " bij afronden"}</h3><ul>{kneut.questions.map(q => <li key={q.id}>{q.question}</li>)}</ul></>}
+      {kneut.questions.length > 0 && <>{!props.recording && <button className="voice-outline-button" onClick={() => void beginDialogue(`Lees deze open vragen kort voor: ${JSON.stringify(kneut.questions)}`, "Welke vragen staan er nog open?")}>Bespreek open vragen na afloop</button>}<h3>Open vragen{props.recording ? "" : " bij afronden"}</h3><ul>{kneut.questions.map(q => <li key={q.id}>{q.question}</li>)}</ul></>}
       {kneut.error && <p role="status">{kneut.error}</p>}
     </div>
     <p className="voice-footnote">Opname, transcriptie en dit overleg horen bij dezelfde vergadering. Gebruik oortjes om de AI-stem uit je opname te houden. Live transcriptie, beoordeling van open vragen en overleg gebruiken je OpenAI-budget. Alleen het overleg stopt na vijf minuten; transcriptie loopt mee met de opname.</p>
-    {snapshot.error && <p className="voice-error" role="alert">{snapshot.error}</p>}
+    {snapshot.error && <div className="voice-error" role="alert"><p>{snapshot.error}</p>{snapshot.diagnostic && <details><summary>Technische foutgegevens</summary><p>Code: {snapshot.diagnostic.code}{snapshot.diagnostic.parameter && <> · Veld: {snapshot.diagnostic.parameter}</>}{snapshot.diagnostic.event && <> · Verzoek: {snapshot.diagnostic.event}</>}</p></details>}</div>}
     {snapshot.playbackBlocked && <button className="voice-outline-button" onClick={() => void session.current?.playAudio()}>Gesproken antwoord afspelen</button>}
     <audio ref={audio} autoPlay controls={connected} className="voice-audio" aria-label="Stem van de AI-notulist" />
     {(connected || messages.length > 0) && <div className="voice-conversation">

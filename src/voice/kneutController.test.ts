@@ -6,7 +6,7 @@ function rig() {
   const input: KneutInput = { text: "", turns: [], incomplete: false, recording: true, live: true, lastSpeechAt: 190000, lastFrameAt: now, voiceBusy: false, manualDialogue: false };
   let state: KneutState | undefined;
   const assess = vi.fn(async (_text: string): Promise<Assessment> => ({ questions: [q], transition: true }));
-  const speak = vi.fn(async (_text: string, allowed: () => boolean) => allowed());
+  const speak = vi.fn(async (_text: string, allowed: () => boolean, _displayText?: string) => allowed());
   const interrupt = vi.fn();
   const controller = new KneutController({ getInput: () => input, assess, speak, interrupt, now: () => now, onChange: s => { state = s; } });
   return { input, assess, speak, interrupt, controller, state: () => state, advance: (ms: number) => { now += ms; input.lastFrameAt = now; }, speech: () => { input.lastSpeechAt = now; }, tick: async () => { controller.tick(); await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); } };
@@ -88,4 +88,12 @@ describe("polite clarification", () => {
     expect(isTopicTransition("Akkoord, volgende punt. Maar wie betaalt dat?")).toBe(false);
     expect(isTopicTransition("Dan gaan we verder met de catering.")).toBe(true);
   });
+});
+
+it("keeps transcript wording separate from the model's continuation instruction",async()=>{
+ const r=rig();r.input.turns=[{id:1,text:"Kneut?"}];r.input.text="Kneut?";r.speech();await r.tick();
+ r.input.turns.push({id:2,text:"Wat is er tot nu toe besproken?"});r.input.text+=" Wat is er tot nu toe besproken?";
+ r.advance(2000);await r.tick();
+ expect(r.speak.mock.calls[0][0]).toBe("Wat is er tot nu toe besproken?");
+ expect(r.speak.mock.calls[0][2]).toBe("Kneut? Wat is er tot nu toe besproken?");
 });

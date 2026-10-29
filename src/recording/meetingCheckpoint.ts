@@ -1,3 +1,4 @@
+import type { VoiceBriefing } from "../voice/voiceContext";
 import type { MeetingNotes } from "../notes/notesClient";
 import type { TranscriptResult } from "../transcription/transcriptionClient";
 export interface LiveCheckpoint {
@@ -12,6 +13,7 @@ export interface MeetingCheckpoint {
   live?: LiveCheckpoint;
   transcripts?: TranscriptResult[];
   notes?: MeetingNotes;
+  briefing?: VoiceBriefing;
   reviewedAudioCount?: number;
 }
 export interface CheckpointStore {

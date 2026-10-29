@@ -122,6 +122,7 @@ describe("live conversation", () => {
     dc.event({ type: "output_audio_buffer.started" });
     expect(current.audio.muted).toBe(true);
     current.voice.sendText("Nieuwe vraag");
+    dc.event({ type: "response.done", response: {status:"cancelled",output:[]} });
     dc.event({ type: "response.created" });
     dc.event({ type: "output_audio_buffer.started" });
     expect(current.audio.muted).toBe(false);
@@ -218,4 +219,48 @@ describe("app-controlled meeting speech", () => {
     current.channel().event({type: "output_audio_buffer.started"});
     expect(current.audio.muted).toBe(true);
   });
+});
+
+
+describe("Realtime request contract and user-visible messages", () => {
+  it("uses valid client item IDs for typed and controlled input", async () => {
+    await current.voice.start();current.voice.sendText("Wat is er besproken?");
+    const event=current.channel().sent.find(e=>e.type==="conversation.item.create" && e.item.id);
+    expect(event!.item.id).toMatch(/^[a-zA-Z0-9_-]{1,32}$/);
+    expect(current.messages.at(-1)).toMatchObject({id:event!.item.id,text:"Wat is er besproken?",role:"user"});
+  });
+  it("keeps internal speech instructions out of the chat and shows the actual spoken request", async () => {
+    await current.voice.speakControlled("Zeg alleen: Ja?",()=>true,"Kneut?");
+    expect(current.messages.filter(m=>m.role==="user").map(m=>m.text)).toEqual(["Kneut?"]);
+    expect(JSON.stringify(current.channel().sent)).toContain("Zeg alleen: Ja?");
+    current.channel().event({type:"response.done",response:{status:"completed",output:[]}});
+    await current.voice.speakControlled("Stel uitsluitend deze verduidelijkingsvraag: Wie regelt dit?",()=>true);
+    expect(current.messages.filter(m=>m.role==="user").map(m=>m.text)).toEqual(["Kneut?"]);
+  });
+  it("waits for cancellation acknowledgement before requesting the next answer",async()=>{
+    await current.voice.start();current.voice.sendText("Eerste vraag");current.channel().event({type:"response.created"});
+    current.voice.sendText("Volgende vraag");
+    expect(current.channel().sent.filter(e=>e.type==="response.create")).toHaveLength(1);
+    expect(current.channel().sent.some(e=>e.type==="response.cancel")).toBe(true);
+    current.channel().event({type:"response.done",response:{status:"cancelled",output:[]}});
+    expect(current.channel().sent.filter(e=>e.type==="response.create")).toHaveLength(2);
+  });
+  it("does not start a queued question after the user cancels it",async()=>{
+    await current.voice.start();current.voice.sendText("Eerste vraag");current.voice.sendText("Nieuwe vraag");current.voice.interrupt();
+    current.channel().event({type:"response.done",response:{status:"cancelled",output:[]}});
+    expect(current.channel().sent.filter(e=>e.type==="response.create")).toHaveLength(1);
+  });
+  it("retains safe diagnostic fields and correlates the failing event, without exposing raw errors",async()=>{
+    await current.voice.start();current.voice.sendText("Vraag");const request=current.channel().sent.find(e=>e.type==="conversation.item.create");
+    current.channel().event({type:"error",error:{code:"invalid_value",param:"item.id",event_id:request!.event_id,message:"private upstream detail sk_private"}});
+    expect(current.snapshots.at(-1)).toMatchObject({status:"error",diagnostic:{code:"invalid_value",parameter:"item.id",event:"conversation.item.create"}});
+    expect(JSON.stringify(current.snapshots)).not.toContain("sk_private");
+  });
+});
+
+it("starts a microphone-enabled dialogue with the wake question as text",async()=>{
+ expect(await current.voice.startDialogue("Wat is besproken?","Kneut, wat is besproken?")).toBe(true);
+ expect(current.track.enabled).toBe(true);expect(current.snapshots.at(-1)?.controlled).toBe(false);
+ expect(current.channel().sent.find(e=>e.session?.audio)?.session.audio.input.turn_detection.create_response).toBe(true);
+ expect(current.messages.at(-1)?.text).toBe("Kneut, wat is besproken?");
 });

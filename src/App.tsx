@@ -11,6 +11,7 @@ import { IndexedDbSegmentStore } from "./recording/localSegmentStore";
 import { LiveTranscription, type LiveState } from "./transcription/liveTranscription";
 import { reviewRecording } from "./transcription/review";
 import { createMeetingNotes, type MeetingNotes } from "./notes/notesClient";
+import type { VoiceBriefing } from "./voice/voiceContext";
 import { VoicePanel } from "./voice/VoicePanel";
 
 const initialState: RecordingState = {
@@ -38,6 +39,9 @@ export function App() {
   const live = useRef<LiveTranscription | null>(null);
   const speech = useRef({ lastSpeechAt: Date.now(), lastFrameAt: 0 });
   const reviewPromise = useRef<Promise<TranscriptResult[]> | null>(null);
+  const [consulting, setConsulting] = useState(false);
+  const consultingRef = useRef(false);
+  const endingMeeting = useRef(false);
   const [restoring, setRestoring] = useState(true);
   const [exporting, setExporting] = useState(false);
   const [storageCheck, setStorageCheck] = useState<StorageCheck>();
@@ -57,6 +61,7 @@ export function App() {
   const [user, setUser] = useState<User | null>(auth.currentUser);
   const [transcripts, setTranscripts] = useState<TranscriptResult[]>([]);
 
+  const [briefingSnapshot, setBriefingSnapshot] = useState<VoiceBriefing>();
   const [notes, setNotes] = useState<MeetingNotes>();
   const [notesLoading, setNotesLoading] = useState(false);
   const meetingId = session.id;
@@ -85,7 +90,7 @@ export function App() {
       if(saved) {
         const isReviewed = segments.length>0 && saved.reviewedAudioCount === segments.length && !!saved.transcripts;
         setTranscripts(isReviewed ? saved.transcripts! : (saved.live?.turns ?? []).map(t=>({...t,replayed:true})));
-        setNotes(saved.notes);setReviewed(isReviewed);
+        setNotes(saved.notes);setBriefingSnapshot(saved.briefing);setReviewed(isReviewed);
       }
     }).catch(cause=>{if(allowed())setError(String(cause));}).finally(()=>{if(!cancelled)setRestoring(false);});
     return () => {cancelled=true;transcriber.close();};
@@ -97,8 +102,9 @@ export function App() {
     setUser(currentUser);
     if (!canUseApp(currentUser)) {
       setTranscripts([]);
+      setBriefingSnapshot(undefined);
       setNotes(undefined);
-      live.current?.close();
+      endingMeeting.current = true;live.current?.close();
       setReviewed(false);
       void recorder.current?.stop().then(() => {
         setRecording(recorder.current?.recordingState ?? initialState);
@@ -108,8 +114,8 @@ export function App() {
 
   useEffect(() => {
     if (canUseApp(user)) void refreshSaved().catch(cause=>setError(String(cause)));
-    const retry = () => { if (canUseApp(auth.currentUser) && recorder.current?.recordingState.status === "recording") live.current?.reconnect(); };
-    const offline = () => { if(canUseApp(auth.currentUser) && recorder.current?.recordingState.status === "recording")live.current?.reconnect(); };
+    const retry = () => { if (canUseApp(auth.currentUser) && !consultingRef.current && !endingMeeting.current && recorder.current?.recordingState.status === "recording") live.current?.reconnect(); };
+    const offline = () => { if(canUseApp(auth.currentUser) && !consultingRef.current && !endingMeeting.current && recorder.current?.recordingState.status === "recording")live.current?.reconnect(); };
     window.addEventListener("online", retry); window.addEventListener("offline", offline);
     return () => { window.removeEventListener("online", retry); window.removeEventListener("offline", offline); };
   }, [user]);
@@ -169,6 +175,12 @@ export function App() {
     try { return await task; } finally { reviewPromise.current=null; setReviewing(false); }
   }
 
+  function changeConsultation(active: boolean) {
+    consultingRef.current = active;setConsulting(active);
+    if (active) live.current?.close();
+    else if (!endingMeeting.current && canUseApp(auth.currentUser) && recorder.current?.recordingState.status === "recording") void live.current?.start();
+  }
+
   async function startOrResume(allowLimitedStorage = false) {
     if(restoring)return;
     setError(undefined); setTransitioning(true);
@@ -181,9 +193,10 @@ export function App() {
       setStorageCheck(storage);
       if(storage.status === "low" && !allowLimitedStorage) {setLimitedStorage(true);return;}
       setLimitedStorage(false);
+      endingMeeting.current = false;
       await recorder.current?.start(meetingId);
       setRecording(recorder.current?.recordingState ?? initialState); setReviewed(false);
-      void live.current?.start();
+      if (!consultingRef.current) void live.current?.start();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Opname kon niet starten.");
     } finally { setTransitioning(false); }
@@ -209,7 +222,7 @@ export function App() {
   }
 
   async function stop() {
-    setTransitioning(true); setError(undefined); setStopSignal(value=>value+1);
+    setTransitioning(true); setError(undefined); endingMeeting.current=true;setStopSignal(value=>value+1);
     try {
       try { await recorder.current?.stop(); }
       finally {
@@ -231,14 +244,14 @@ export function App() {
   async function restoreMeeting(id: string) {
     if(isRecording || isPaused || reviewing || notesLoading || transitioning || restoring || exporting)return;
     const previous=savedMeetings.find(s=>s.id===id); if(!previous)return;
-    setSession({id,startedAt:previous.startedAt}); setRecording(initialState); setTranscripts([]); setNotes(undefined); setReviewed(false); setError(undefined);setLimitedStorage(false);setStorageCheck(undefined);setBackupNotice(undefined);
+    setSession({id,startedAt:previous.startedAt}); setRecording(initialState); setTranscripts([]);setBriefingSnapshot(undefined); setNotes(undefined); setReviewed(false); setError(undefined);setLimitedStorage(false);setStorageCheck(undefined);setBackupNotice(undefined);
   }
 
   function startNewSession() {
     if (isRecording || isPaused || reviewing || notesLoading || transitioning || restoring || exporting) return;
     setSession({ id: createSessionId(), startedAt: Date.now() });
     setRecording(initialState);
-    setTranscripts([]);
+    setTranscripts([]);setBriefingSnapshot(undefined);
     setNotes(undefined);
     setReviewed(false);
     setError(undefined);setLimitedStorage(false);setStorageCheck(undefined);setBackupNotice(undefined);
@@ -270,16 +283,17 @@ export function App() {
     finally {setExporting(false);}
   }
   function exportText() {
-    downloadBlob(new Blob([JSON.stringify({version:1,meetingId,session,transcripts,notes},null,2)],{type:"application/json"}),`${meetingId}-tekst-en-notulen.json`);
+    downloadBlob(new Blob([JSON.stringify({version:1,meetingId,session,transcripts,notes,briefing:briefingSnapshot},null,2)],{type:"application/json"}),`${meetingId}-tekst-en-notulen.json`);
   }
 
   async function signOutAccount() {
     setError(undefined);
     try {
-      live.current?.close(); await recorder.current?.stop();
+      endingMeeting.current=true;live.current?.close(); await recorder.current?.stop();
       await signOut(auth);
       setRecording(initialState);
       setTranscripts([]);
+      setBriefingSnapshot(undefined);
       setNotes(undefined);
       live.current?.close();
       setReviewed(false);
@@ -348,14 +362,14 @@ export function App() {
         {isRecording && <p className="muted">{wakeActive?"Scherm wakker houden is actief.":"Scherm wakker houden is niet actief. Houd de app zichtbaar en voorkom dat het apparaat vergrendelt."} Sluit het apparaat aan op stroom.</p>}
         {backupNotice && <p role="status">{backupNotice}</p>}
       <div className="meeting-workspace-heading"><h2>Deze vergadering</h2><p>{isRecording ? "Opname loopt · overleg gerust tussendoor" : isPaused ? "Opname gepauzeerd · overleg blijft beschikbaar" : "Opname, tekst en overleg op één plek"}</p></div>
-      <VoicePanel key={meetingId} meetingId={meetingId} transcripts={transcripts} notes={notes} stopSignal={stopSignal} getMicrophone={() => recorder.current?.cloneMicrophone()} recording={isRecording} liveAvailable={liveState === "live"} getSpeechActivity={() => ({ ...speech.current, transcriptPending: live.current?.unsettled ?? true })}
+      <VoicePanel key={meetingId} meetingId={meetingId} transcripts={transcripts} notes={notes} stopSignal={stopSignal} getMicrophone={() => recorder.current?.cloneMicrophone()} recording={isRecording} initialBriefing={briefingSnapshot} onBriefingUpdated={summary=>{setBriefingSnapshot(summary);void store.current.saveMeeting(meetingId,{briefing:summary}).catch(checkpointIssue);}} onConsultationChange={changeConsultation} liveAvailable={liveState === "live"} getSpeechActivity={() => ({ ...speech.current, transcriptPending: live.current?.unsettled ?? true })}
         onNotesUpdated={(updated) => { if (sessionIdRef.current === updated.meetingId) {setNotes(updated);void store.current.saveMeeting(meetingId,{notes:updated}).catch(checkpointIssue);} }} />
 
       <section className="transcript-card">
         <div className="transcript-heading">
           <div><span className="label">Transcriptie</span><h2>Live tekst</h2></div>
           <div className="queue-actions">
-            <span>{reviewed ? "Na afloop verwerkt" : liveState === "live" ? "Live · voorlopig" : liveState === "blocked" ? "Live herstel vraagt aandacht" : liveState === "recovering" ? "Tekst inhalen · Kneut wacht" : liveState === "connecting" ? "Live verbinding maken…" : "Lokale audio beschikbaar"}</span>
+            <span>{consulting && isRecording ? "Live tekst gepauzeerd · overleg met Kneut" : reviewed ? "Na afloop verwerkt" : liveState === "live" ? "Live · voorlopig" : liveState === "blocked" ? "Live herstel vraagt aandacht" : liveState === "recovering" ? "Tekst inhalen · Kneut wacht" : liveState === "connecting" ? "Live verbinding maken…" : "Lokale audio beschikbaar"}</span>
             {(liveState === "offline" || liveState === "blocked" || (!isRecording && recording.localSequences.length>0)) && <button className="retry-button" disabled={reviewing || transitioning || isPaused} onClick={retryTranscriptie}>{isRecording ? "Live tekst herstellen" : "Transcript opnieuw controleren"}</button>}
             {!isRecording && !isPaused && recording.localSequences.length>0 && <button className="secondary-light-button" onClick={() => void generateNotes()} disabled={notesLoading || reviewing || transitioning || restoring || exporting}>{notesLoading ? "Notulen maken…" : "Maak definitieve notulen"}</button>}
 

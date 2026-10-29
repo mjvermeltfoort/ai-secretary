@@ -1,7 +1,11 @@
 import type { MeetingNotes, ActionItemProposal } from "../notes/notesClient";
 import type { TranscriptResult } from "../transcription/transcriptionClient";
 
-export function meetingVoiceContext(meetingId: string, transcripts: TranscriptResult[], notes?: MeetingNotes): string {
+export interface VoiceBriefing {summary:string;sourceText:string;provisional:boolean;}
+export function briefingSource(meetingId:string,transcripts:TranscriptResult[]):string {
+  return transcripts.filter(t=>t.meetingId===meetingId && (!t.provisional || t.liveFinal)).sort((a,b)=>a.sequence-b.sequence).map(t=>t.text.trim()).filter(Boolean).join("\n");
+}
+export function meetingVoiceContext(meetingId: string, transcripts: TranscriptResult[], notes?: MeetingNotes, briefing?: VoiceBriefing): string {
   const transcript = transcripts.filter((item) => item.meetingId === meetingId)
     .sort((a, b) => a.sequence - b.sequence).map((item) => item.text).join("\n");
   const currentNotes = notes?.meetingId === meetingId ? notes : undefined;
@@ -16,6 +20,7 @@ export function meetingVoiceContext(meetingId: string, transcripts: TranscriptRe
   }
   return JSON.stringify({
     meetingId,
+    briefing: briefing && briefing.sourceText===briefingSource(meetingId,transcripts) ? {summary:briefing.summary,provisional:briefing.provisional,source:"available_meeting_transcript",isSummary:true} : null,
     transcriptIsProvisional: transcripts.some(item=>item.provisional),
     transcriptIncomplete: transcript.length > 12_000,
     recentTranscript: transcript.slice(-12_000),

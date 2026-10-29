@@ -14,7 +14,8 @@ export interface KneutInput {
 interface Options {
   getInput: () => KneutInput;
   assess: (text: string) => Promise<Assessment>;
-  speak: (text: string, stillAllowed: () => boolean) => Promise<boolean>;
+  speak: (text: string, stillAllowed: () => boolean, displayText?: string) => Promise<boolean>;
+  ask?: (text: string, displayText: string) => Promise<boolean>;
   interrupt: () => void;
   onChange: (state: KneutState) => void;
   now?: () => number;
@@ -35,7 +36,7 @@ export function isTopicTransition(text: string): boolean {
 export class KneutController {
   private state: KneutState = { questions: [], deferred: false, listening: false };
   private seen = new Set<number>();
-  private pending?: { text: string; since: number; bare?: boolean };
+  private pending?: { text: string; since: number; bare?: boolean; displayText: string };
   private awaitingQuestionUntil = 0;
   private assessmentText = "";
   private transition = false;
@@ -82,19 +83,20 @@ export class KneutController {
       const addressed = addressKneut(turn.text);
       if (addressed !== undefined) {
         if (/bewaar.*vragen.*(?:eind|later)|(?:stel|bewaar).*vragen.*uit/iu.test(addressed)) {
-          this.defer(true); this.pending = { text: "Bevestig kort: ik bewaar mijn vragen tot het einde.", since: this.now() };
+          this.defer(true); this.pending = { text: "Bevestig kort: ik bewaar mijn vragen tot het einde.", displayText: turn.text, since: this.now() };
         } else if (/wat (?:staat|is|zijn).*open|welke vragen.*(?:nog|open)/iu.test(addressed)) {
-          this.pending = { text: `Lees de open verduidelijkingsvragen kort voor, zonder antwoorden te verzinnen: ${JSON.stringify(this.state.questions)}`, since: this.now() };
+          this.pending = { text: `Lees de open verduidelijkingsvragen kort voor, zonder antwoorden te verzinnen: ${JSON.stringify(this.state.questions)}`, displayText: turn.text, since: this.now() };
         } else {
-          this.pending = { text: addressed || "Zeg alleen: Ja?", since: this.now(), bare: !addressed };
+          this.pending = { text: addressed || "Zeg alleen: Ja?", displayText: turn.text, since: this.now(), bare: !addressed };
         }
         this.emit({ listening: true });
       } else if (this.pending) {
-        this.pending.text += `\nVervolg van de vraag: ${turn.text}`;
+        this.pending.text = this.pending.bare ? turn.text : this.pending.text + `\nVervolg van de vraag: ${turn.text}`;
+        this.pending.displayText += ` ${turn.text}`;
         this.pending.bare = false;
       } else if (this.now() < this.awaitingQuestionUntil) {
         this.awaitingQuestionUntil = 0;
-        this.pending = { text: turn.text, since: this.now() };
+        this.pending = { text: turn.text, displayText: turn.text, since: this.now() };
         this.emit({ listening: true });
       }
     }
@@ -104,7 +106,7 @@ export class KneutController {
       this.dispatch(pending.text, () => this.pending === pending && this.quiet(this.options.getInput(), 1800), () => {
         this.awaitingQuestionUntil = pending.bare ? this.now() + 15000 : 0;
         this.pending = undefined; this.emit({ listening: false });
-      });
+      }, pending.displayText, true);
       return;
     }
     if (!input.manualDialogue && !input.voiceBusy && input.text.trim() && !input.incomplete && input.text !== this.assessmentText && !this.busy && this.now() - this.requestedAt >= 12000) {
@@ -131,10 +133,14 @@ export class KneutController {
       });
     }
   }
-  private dispatch(text: string, allowed: () => boolean, sent: () => void) {
+  private dispatch(text: string, allowed: () => boolean, sent: () => void, displayText?: string, dialogue = false) {
     const epoch = this.epoch;
     this.speaking = true;
-    void this.options.speak(text, () => !this.disposed && epoch === this.epoch && allowed()).then(ok => {
+    const stillAllowed = () => !this.disposed && epoch === this.epoch && allowed();
+    const action = dialogue && this.options.ask
+      ? (stillAllowed() ? this.options.ask(text, displayText ?? "Kneut") : Promise.resolve(false))
+      : this.options.speak(text, stillAllowed, displayText);
+    void action.then(ok => {
       if (ok && !this.disposed && epoch === this.epoch) sent();
     }).catch(() => { if (!this.disposed) this.emit({ error: "Kneut kon niet spreken. Je kunt de gespreksknop gebruiken." }); })
       .finally(() => { this.speaking = false; });
