@@ -37,7 +37,7 @@ export function App() {
   const recorder = useRef<BrowserRecorder | null>(null);
   const store = useRef(new IndexedDbSegmentStore());
   const live = useRef<LiveTranscription | null>(null);
-  const speech = useRef({ lastSpeechAt: Date.now(), lastFrameAt: 0 });
+  const speech = useRef({ lastSpeechAt: Date.now(), lastFrameAt: 0, level: 0 });
   const reviewPromise = useRef<Promise<TranscriptResult[]> | null>(null);
   const [consulting, setConsulting] = useState(false);
   const consultingRef = useRef(false);
@@ -136,6 +136,7 @@ export function App() {
         const now = Date.now();
         const rms = Math.sqrt(samples.reduce((sum, sample) => sum + (sample / 32768) ** 2, 0) / Math.max(1, samples.length));
         speech.current.lastFrameAt = now;
+        speech.current.level = Math.min(1, rms * 10);
         if (rms >= 0.008) { speech.current.lastSpeechAt = now; live.current?.noteSpeech(); }
       },
       onSegment: segment => { setAudioDuration((segment.startMs ?? 0) + segment.durationMs); setRecording(instance.recordingState); setReviewed(false); live.current?.notifySavedAudio(segment); },
@@ -329,6 +330,23 @@ export function App() {
     </section></main>;
   }
 
+  const recordingActions = <>
+          {!isRecording && <button className="record-button" onClick={()=>void startOrResume()} disabled={!canUseApp(user) || reviewing || notesLoading || transitioning || restoring || exporting}>{isPaused || recording.localSequences.length>0 ? "Hervat vergadering" : "Start vergadering"}</button>}
+          {isRecording && <button className="secondary-button" onClick={()=>void pause()} disabled={transitioning}>Pauzeer</button>}
+          {(isRecording || isPaused) && <button className="finish-button" onClick={()=>void stop()} disabled={transitioning}>Afronden</button>}
+        </>;
+  const meetingAlerts = <>        {error && <p className="workspace-error" role="alert">{error}</p>}
+        {restoring && <p role="status">Vergadering herstellen…</p>}
+        {limitedStorage && !isRecording && <div className="storage-warning" role="alert"><p>Onvoldoende vrije opslag voor een lange opname. Maak ruimte vrij of download eerdere opnamen.</p><button className="secondary-button" disabled={transitioning || restoring || exporting} onClick={()=>void startOrResume(true)}>Toch starten met beperkte opslag</button></div>}
+        {storageCheck?.status === "unknown" && <p className="attention-note">Vrije opslag onbekend. Houd ongeveer 700 MB vrij voor vier uur opname.</p>}
+        {isRecording && storageCheck?.status === "low" && <p className="attention-note" role="alert">Opslag bijna vol. Rond af en download de opname.</p>}
+        {isRecording && !wakeActive && <p className="attention-note">Houd de app zichtbaar en voorkom schermvergrendeling.</p>}
+        {backupNotice && <p className="attention-note" role="status">{backupNotice}</p>}
+        {liveState === "recovering" && <p role="status">Live tekst wordt bijgewerkt. Kneut wacht op actuele tekst.</p>}
+        {liveState === "offline" && isRecording && !consulting && <p role="status">Live tekst onderbroken. De opname loopt door; de verbinding wordt automatisch hersteld.</p>}
+        {liveState === "blocked" && <p role="alert">Live tekst vraagt aandacht. Open Live tekst om te herstellen.</p>}
+        {reviewing && <p role="status">Transcriptie controleren: {progress.done} van {progress.total || "…"} delen.</p>}</>;
+
   const liveContent = (<section className="transcript-card">
         <div className="transcript-heading">
           <h2>Live tekst</h2>
@@ -387,24 +405,10 @@ export function App() {
         </details>
       </header>
       <section className="meeting-workspace" aria-label="Vergadering en notulist">
-        <div className="record-actions">
-          {!isRecording && <button className="record-button" onClick={()=>void startOrResume()} disabled={!canUseApp(user) || reviewing || notesLoading || transitioning || restoring || exporting}>{isPaused || recording.localSequences.length>0 ? "Hervat vergadering" : "Start vergadering"}</button>}
-          {isRecording && <button className="secondary-button" onClick={()=>void pause()} disabled={transitioning}>Pauzeer</button>}
-          {(isRecording || isPaused) && <button className="finish-button" onClick={()=>void stop()} disabled={transitioning}>Afronden</button>}
-        </div>
-        {error && <p className="workspace-error" role="alert">{error}</p>}
-        {restoring && <p role="status">Vergadering herstellen…</p>}
-        {limitedStorage && !isRecording && <div className="storage-warning" role="alert"><p>Onvoldoende vrije opslag voor een lange opname. Maak ruimte vrij of download eerdere opnamen.</p><button className="secondary-button" disabled={transitioning || restoring || exporting} onClick={()=>void startOrResume(true)}>Toch starten met beperkte opslag</button></div>}
-        {storageCheck?.status === "unknown" && <p className="attention-note">Vrije opslag onbekend. Houd ongeveer 700 MB vrij voor vier uur opname.</p>}
-        {isRecording && storageCheck?.status === "low" && <p className="attention-note" role="alert">Opslag bijna vol. Rond af en download de opname.</p>}
-        {isRecording && !wakeActive && <p className="attention-note">Houd de app zichtbaar en voorkom schermvergrendeling.</p>}
-        {backupNotice && <p className="attention-note" role="status">{backupNotice}</p>}
-        {liveState === "recovering" && <p role="status">Live tekst wordt bijgewerkt. Kneut wacht op actuele tekst.</p>}
-        {liveState === "offline" && isRecording && !consulting && <p role="status">Live tekst onderbroken. De opname loopt door; de verbinding wordt automatisch hersteld.</p>}
-        {liveState === "blocked" && <p role="alert">Live tekst vraagt aandacht. Open Live tekst om te herstellen.</p>}
-        {reviewing && <p role="status">Transcriptie controleren: {progress.done} van {progress.total || "…"} delen.</p>}
+        <div className="record-actions">{recordingActions}</div>
+        {meetingAlerts}
       <VoicePanel key={meetingId} meetingId={meetingId} transcripts={transcripts} notes={notes} stopSignal={stopSignal} getMicrophone={() => recorder.current?.cloneMicrophone()} recording={isRecording} initialBriefing={briefingSnapshot} onBriefingUpdated={summary=>{setBriefingSnapshot(summary);void store.current.saveMeeting(meetingId,{briefing:summary}).catch(checkpointIssue);}} onConsultationChange={changeConsultation} liveAvailable={liveState === "live"} getSpeechActivity={() => ({ ...speech.current, transcriptPending: live.current?.unsettled ?? true })}
-        liveContent={liveContent} notesContent={notesContent}
+        liveContent={liveContent} notesContent={notesContent} recordingActions={recordingActions} meetingAlerts={meetingAlerts} recordingLabel={`${isRecording ? "Opname loopt" : isPaused ? "Opname gepauzeerd" : "Geen actieve opname"} · ${new Date(audioDuration).toISOString().slice(11,19)}`}
         onNotesUpdated={(updated) => { if (sessionIdRef.current === updated.meetingId) {setNotes(updated);void store.current.saveMeeting(meetingId,{notes:updated}).catch(checkpointIssue);} }} />
       </section>
       <details className="recording-details"><summary>Details</summary><dl><div><dt>Gestart</dt><dd>{new Date(session.startedAt).toLocaleString("nl-NL")}</dd></div><div><dt>Opgeslagen audioblokken</dt><dd>{recording.localSequences.length}</dd></div><div><dt>Transcriptiecontrole</dt><dd>{reviewed ? "Gecontroleerd" : "Nog niet gecontroleerd"}</dd></div><div><dt>Scherm wakker houden</dt><dd>{wakeActive ? "Actief" : "Niet actief"}</dd></div></dl></details>

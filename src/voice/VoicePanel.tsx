@@ -7,9 +7,14 @@ import { assessClarity } from "./kneutClient";
 import { createVoiceToken } from "./voiceClient";
 import { prepareVoiceBriefing } from "./voiceBriefing";
 import { briefingSource, meetingVoiceContext, type VoiceBriefing } from "./voiceContext";
+import { KneutCharacter } from "./KneutCharacter";
+import { KneutStage, stagePresentation, type SpeechActivity } from "./KneutStage";
 import { VoiceSession, type VoiceMessage, type VoiceSnapshot } from "./voiceSession";
 
 interface Props {
+  recordingActions?: ReactNode;
+  meetingAlerts?: ReactNode;
+  recordingLabel?: string;
   liveContent?: ReactNode;
   notesContent?: ReactNode;
   meetingId: string;
@@ -23,7 +28,7 @@ interface Props {
   onBriefingUpdated?: (briefing: VoiceBriefing) => void;
   onConsultationChange?: (active: boolean) => void;
   liveAvailable?: boolean;
-  getSpeechActivity?: () => { lastSpeechAt: number; lastFrameAt: number; transcriptPending?: boolean };
+  getSpeechActivity?: () => SpeechActivity;
 }
 interface PendingProposal { proposal: ActionItemProposal; expectedRevision: string; }
 function savedKneut(meetingId: string): KneutState {
@@ -42,6 +47,7 @@ const initial: VoiceSnapshot = { status: "idle", micMuted: false, playbackBlocke
 const labels = { idle: "Luistert mee", connecting: "Verbinden…", listening: "Luistert naar je vraag", thinking: "Denkt na…", speaking: "Spreekt", error: "Niet verbonden" };
 
 export function VoicePanel(props: Props) {
+  const [stageOpen, setStageOpen] = useState(false);
   const [tab, setTab] = useState("summary");
   const [historyOpen, setHistoryOpen] = useState(false);
   const tabs = [{id:"summary",label:"Samenvatting"},{id:"live",label:"Live tekst"},{id:"notes",label:"Notulen"}];
@@ -261,15 +267,14 @@ export function VoicePanel(props: Props) {
 
   return <section className={`voice-panel voice-state-${snapshot.status}`} aria-labelledby="voice-heading">
     <div className="voice-intro">
-      <div className="notulist-character" role="img" aria-label={`AI-notulist: ${labels[snapshot.status]}`}>
-        <div className="character-halo" /><div className="character-face"><i className="character-eye" /><i className="character-eye" /><span className="character-mouth" /></div>
-      </div>
+      <KneutCharacter mode={stagePresentation(snapshot,!!props.recording,!!props.liveAvailable,preparing,props.getSpeechActivity?.(),Date.now()).mode} />
       <div className="voice-title"><h2 id="voice-heading">Kneut</h2>
         <p className="voice-status" role="status">{preparing ? "Leest de vergadering bij…" : kneut.listening ? "Luistert naar je vraag…" : snapshot.controlled && snapshot.status === "listening" ? "Luistert mee" : snapshot.micMuted && snapshot.status === "listening" ? "Microfoon uit · je kunt ook typen" : snapshot.status === "idle" && !props.recording ? "Klaar voor je vraag" : labels[snapshot.status]}</p>
         {!active && !preparing && props.recording && <p className="voice-explainer">Zeg ‘Kneut’ om een vraag te stellen.</p>}
       </div>
     </div>
     <div className="voice-controls">
+      <button className="voice-outline-button" onClick={()=>setStageOpen(true)}>Toon Kneut groot</button>
       {preparing ? <button className="secondary-button" onClick={cancelPreparation}>Voorbereiden annuleren</button> : !active || snapshot.controlled ? <button className="record-button" onClick={() => void beginDialogue()}>Praat met Kneut</button>
         : <button className="secondary-button" onClick={() => session.current?.disconnect()}>{connected ? "Terug naar meeluisteren" : "Annuleren"}</button>}
       {connected && !snapshot.controlled && <>
@@ -326,5 +331,7 @@ export function VoicePanel(props: Props) {
     </div></div>
     <div className="meeting-tabpanel" role="tabpanel" id={`${tabPrefix}-panel-live`} aria-labelledby={`${tabPrefix}-tab-live`} hidden={tab!=="live"} tabIndex={0}>{props.liveContent ?? <p className="muted">Nog geen vergadertekst.</p>}</div>
     <div className="meeting-tabpanel" role="tabpanel" id={`${tabPrefix}-panel-notes`} aria-labelledby={`${tabPrefix}-tab-notes`} hidden={tab!=="notes"} tabIndex={0}>{props.notesContent ?? <p className="muted">Nog geen notulen.</p>}</div>
+    {stageOpen && <KneutStage snapshot={snapshot} recording={!!props.recording} liveAvailable={!!props.liveAvailable} preparing={preparing} getActivity={props.getSpeechActivity} recordingLabel={props.recordingLabel ?? (props.recording ? "Opname loopt" : "Geen actieve opname")} recordingActions={props.recordingActions} alerts={props.meetingAlerts} proposalPending={!!pending}
+      onClose={()=>setStageOpen(false)} onTalk={()=>void beginDialogue()} onEndTalk={()=>session.current?.disconnect()} onCancelPreparation={cancelPreparation} onMute={()=>session.current?.setMicMuted(!snapshot.micMuted)} onInterrupt={()=>session.current?.interrupt()} onPlay={()=>void session.current?.playAudio()} />}
   </section>;
 }
