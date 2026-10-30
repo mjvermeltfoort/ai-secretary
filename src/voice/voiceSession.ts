@@ -3,7 +3,7 @@ import { parseActionItemProposal, type VoiceActionItemProposal } from "./voiceCo
 export type VoiceStatus = "idle" | "connecting" | "listening" | "thinking" | "speaking" | "error";
 export interface VoiceToken { value: string; expiresAt: number; model: string; instructions: string; }
 export interface VoiceMessage { id: string; role: "user" | "assistant"; text: string; final: boolean; interrupted?: boolean; }
-export interface VoiceSnapshot { status: VoiceStatus; micMuted: boolean; playbackBlocked: boolean; error?: string; controlled?: boolean; diagnostic?: { code: string; parameter?: string; event?: string }; }
+export interface VoiceSnapshot { status: VoiceStatus; micMuted: boolean; playbackBlocked: boolean; userSpeaking?: boolean; error?: string; controlled?: boolean; diagnostic?: { code: string; parameter?: string; event?: string }; }
 interface VoiceOptions {
   audio: HTMLAudioElement;
   createToken: () => Promise<VoiceToken>;
@@ -191,7 +191,7 @@ export class VoiceSession {
   setMicMuted(micMuted: boolean): void {
     this.stream?.getAudioTracks().forEach((track) => { track.enabled = !micMuted; });
     this.send({ type: "input_audio_buffer.clear" });
-    this.emit({ micMuted });
+    this.emit({ micMuted, ...(micMuted ? {userSpeaking:false} : {}) });
   }
 
   interrupt(manual = true): void {
@@ -237,7 +237,7 @@ export class VoiceSession {
     this.lastContext = "";
     this.suppressAudio = false;
     this.waitingForDone = false; this.pendingResponse = false; this.sentEvents.clear();
-    this.emit({ status: "idle", micMuted: false, controlled: false, playbackBlocked: false, diagnostic: undefined });
+    this.emit({ status: "idle", userSpeaking: false, micMuted: false, controlled: false, playbackBlocked: false, diagnostic: undefined });
   }
 
   private fail(error: string, diagnostic?: VoiceSnapshot["diagnostic"]): void {
@@ -269,12 +269,12 @@ export class VoiceSession {
     switch (event.type) {
       case "input_audio_buffer.speech_started":
         this.interrupt(false);
-        this.emit({ status: "listening" });
+        this.emit({ status: "listening", userSpeaking: true });
         break;
       case "input_audio_buffer.speech_stopped":
         if (!this.controlled) this.suppressAudio = false;
         this.updateContext();
-        this.emit({ status: "thinking" });
+        this.emit({ status: "thinking", userSpeaking: false });
         break;
       case "response.created":
         this.waitingForDone = true;

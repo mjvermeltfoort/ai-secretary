@@ -264,3 +264,10 @@ it("starts a microphone-enabled dialogue with the wake question as text",async()
  expect(current.channel().sent.find(e=>e.session?.audio)?.session.audio.input.turn_detection.create_response).toBe(true);
  expect(current.messages.at(-1)?.text).toBe("Kneut, wat is besproken?");
 });
+
+it("reports detected user speech for the character and clears it on mute and disconnect",async()=>{
+ await current.voice.start();current.channel().event({type:"input_audio_buffer.speech_started"});expect(current.snapshots.at(-1)?.userSpeaking).toBe(true);
+ current.voice.setMicMuted(true);expect(current.snapshots.at(-1)?.userSpeaking).toBe(false);
+ current.voice.setMicMuted(false);current.channel().event({type:"input_audio_buffer.speech_started"});current.channel().event({type:"input_audio_buffer.speech_stopped"});expect(current.snapshots.at(-1)?.userSpeaking).toBe(false);
+ current.voice.disconnect();expect(current.snapshots.at(-1)?.userSpeaking).toBe(false);
+});

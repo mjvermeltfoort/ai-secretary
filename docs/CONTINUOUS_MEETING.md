@@ -27,6 +27,16 @@ Onder Kneut staan de actuele gespreksknoppen en **Vragen stellen: Bij overgangen
 
 Algemene uitleg staat onder Help; technische opnamegegevens onder Details. Opslagwaarschuwingen, opnamefouten en herstelproblemen blijven buiten de tabbladen zichtbaar. Transcriptievoortgang blijft tijdens verwerken zichtbaar. De opnamestatus wordt één keer in de kop getoond, live regels hebben geen herhaald Live-label.
 
+## Kneut op de tablet
+
+**Toon Kneut groot** opent een schermvullende overlay binnen de app met het geanimeerde personage op basis van het Heikneuterslogo uit 2026. Het openen maakt geen extra opname of betaalde spraakverbinding. In portret staat Kneut boven de bediening; in landschap staat hij ernaast. Met **Volledig scherm** kan de browser ook de adresbalk verbergen; bij weigering blijft de overlay gewoon werken. Er is geen Android-systeemoverlay over andere apps toegevoegd.
+
+De luisterringen bewegen rustig; de geluidsbalkjes reageren op de lokaal gemeten microfoonsterkte uit dezelfde bestaande opname. Tijdens een afzonderlijk spraakgesprek gebruikt de indicator ook de spraakdetectie-events van de Realtime-verbinding. Dat is een activiteitsindicatie, geen bewijs dat ieder woord juist getranscribeerd wordt. Oude microfoonframes, een gepauzeerde opname of ontbrekende live tekst worden niet als actief meeluisteren weergegeven. Voorbereiden, verbinden, nadenken, spreken, gedempte gespreksmicrofoon en geblokkeerd afspelen hebben eigen statussen. De mondanimatie gebruikt twee beelden; dit is geen exacte lipsynchronisatie.
+
+Starten/hervatten, pauzeren, afronden, overleg en onderbreken blijven in de overlay bereikbaar. Meldingen over opslag, opname of verwerking blijven zichtbaar, net als een verwijzing naar een te controleren wijzigingsvoorstel. Het kruisje of Escape sluit uitsluitend de weergave, zonder de opname of het gesprek te stoppen. Alleen door deze weergave geactiveerd browser-fullscreen wordt bij sluiten opgeruimd. Browserfocus keert terug naar de knop. De bestaande wake lock blijft gekoppeld aan de opname; fullscreen maakt achtergrondopname niet betrouwbaarder.
+
+De beelden zijn lokaal meegeleverd onder `public/kneut`; animaties en activiteitsweergave gebruiken geen extra AI-verzoeken. Verminderde beweging wordt gerespecteerd. Geautomatiseerde tests en een Chromium-proef met synthetische microfoon controleren audioactiviteit, statuswissels, pauzeren/hervatten, wake-activering in de overlay, sluiten zonder te stoppen, fullscreen en tablet-/telefoonoriëntaties. API-antwoorden zijn daarbij gemockt. Test de daadwerkelijke tablet en echte stemmen voor gebruik in een vergadering.
+
 ## Audio en transcriptie
 
 - Eén AudioWorklet leest doorlopend mono PCM op 24 kHz. Opslaan herstart nooit de

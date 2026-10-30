@@ -158,3 +158,11 @@ it("collapses finished dialogue and makes it available without reconnecting",()=
  expect(screen.getByRole("log").textContent).toContain("Eerder antwoord");expect(rig.startDialogue).not.toHaveBeenCalled();
  fireEvent.click(screen.getByRole("button",{name:"Verberg gesprek"}));expect(screen.queryByRole("log")).toBeNull();
 });
+
+it("opens and closes the character stage without starting or ending a voice session",()=>{
+ Object.defineProperty(HTMLDialogElement.prototype,"showModal",{configurable:true,value:function(){this.setAttribute("open","");}});
+ Object.defineProperty(HTMLDialogElement.prototype,"close",{configurable:true,value:function(){this.removeAttribute("open");}});
+ render(panel());fireEvent.click(screen.getByRole("button",{name:"Toon Kneut groot"}));expect(screen.getByRole("dialog",{name:"Kneut"})).toBeTruthy();
+ expect(rig.startDialogue).not.toHaveBeenCalled();fireEvent.click(screen.getByRole("button",{name:"Terug naar vergadering"}));
+ expect(screen.queryByRole("dialog")).toBeNull();expect(rig.disconnect).not.toHaveBeenCalled();
+});
